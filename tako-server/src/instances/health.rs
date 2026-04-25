@@ -8,13 +8,17 @@ use super::{App, INTERNAL_TOKEN_HEADER, Instance, InstanceState};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tokio::time::{interval, timeout};
+use tokio::time::timeout;
 
 /// Health check configuration
 #[derive(Debug, Clone)]
 pub struct HealthConfig {
-    /// Interval between health checks
+    /// Steady-state interval between health checks (after first Healthy probe).
     pub check_interval: Duration,
+    /// Faster interval used while any instance is still in startup
+    /// (Starting/Ready, not yet Healthy). Drops cold-start probe slack
+    /// from up to 1s down to ~100ms.
+    pub startup_check_interval: Duration,
     /// Number of consecutive failures before marking unhealthy
     pub unhealthy_threshold: u32,
     /// Number of consecutive failures before marking dead
@@ -29,6 +33,7 @@ impl Default for HealthConfig {
     fn default() -> Self {
         Self {
             check_interval: crate::defaults::HEALTH_CHECK_INTERVAL,
+            startup_check_interval: crate::defaults::HEALTH_STARTUP_CHECK_INTERVAL,
             unhealthy_threshold: 1, // 1 failure = unhealthy
             dead_threshold: 1,      // 1 failure = dead (restart immediately)
             probe_timeout: crate::defaults::HEALTH_PROBE_TIMEOUT,
@@ -75,14 +80,25 @@ impl HealthChecker {
         value.max(1)
     }
 
-    /// Start health check loop for an app
+    /// Start health check loop for an app.
+    ///
+    /// Uses `startup_check_interval` while any instance is still in startup
+    /// (Starting or Ready); falls back to `check_interval` once all instances
+    /// are Healthy. This collapses the worst-case probe slack on cold start
+    /// from `check_interval` (typically 1s) to `startup_check_interval`
+    /// (typically 100ms) without paying for high-frequency probes at steady
+    /// state.
     pub async fn monitor_app(&self, app: Arc<App>) {
-        let mut check_interval = interval(self.config.check_interval);
         let concurrency = Self::effective_probe_concurrency(self.config.max_probe_concurrency);
         let semaphore = Arc::new(tokio::sync::Semaphore::new(concurrency));
 
         loop {
-            check_interval.tick().await;
+            let interval = if app_has_starting_instance(&app) {
+                self.config.startup_check_interval
+            } else {
+                self.config.check_interval
+            };
+            tokio::time::sleep(interval).await;
 
             let instances = app.get_instances();
             let mut checks = tokio::task::JoinSet::new();
@@ -253,6 +269,15 @@ impl HealthChecker {
     }
 }
 
+/// True if any of the app's instances is in a startup state — i.e. it has
+/// been spawned but not yet observed Healthy by a probe. Drives the choice
+/// between fast and steady-state probe intervals.
+fn app_has_starting_instance(app: &App) -> bool {
+    app.get_instances()
+        .iter()
+        .any(|i| matches!(i.state(), InstanceState::Starting | InstanceState::Ready))
+}
+
 async fn probe_instance_health(
     instance: &Instance,
     health_host: &str,
@@ -387,10 +412,36 @@ mod tests {
             config.check_interval,
             crate::defaults::HEALTH_CHECK_INTERVAL
         );
+        assert_eq!(
+            config.startup_check_interval,
+            crate::defaults::HEALTH_STARTUP_CHECK_INTERVAL
+        );
+        assert!(
+            config.startup_check_interval < config.check_interval,
+            "startup probe must be faster than steady-state"
+        );
         assert_eq!(config.unhealthy_threshold, 1);
         assert_eq!(config.dead_threshold, 1);
         assert_eq!(config.probe_timeout, crate::defaults::HEALTH_PROBE_TIMEOUT);
         assert_eq!(config.max_probe_concurrency, 16);
+    }
+
+    #[test]
+    fn test_app_has_starting_instance_detects_startup_states() {
+        let app = create_test_app();
+        let instance = app.allocate_instance();
+
+        instance.set_state(InstanceState::Starting);
+        assert!(app_has_starting_instance(&app));
+
+        instance.set_state(InstanceState::Ready);
+        assert!(app_has_starting_instance(&app));
+
+        instance.set_state(InstanceState::Healthy);
+        assert!(!app_has_starting_instance(&app));
+
+        instance.set_state(InstanceState::Unhealthy);
+        assert!(!app_has_starting_instance(&app));
     }
 
     #[test]

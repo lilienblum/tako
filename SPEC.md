@@ -1355,7 +1355,7 @@ Server-side validation on `deploy` and app-scoped commands:
 
 Active HTTP probing is the source of truth for instance health:
 
-- **Probe interval**: 1 second by default (configurable)
+- **Probe interval**: 1 second steady-state, dropped to 100 ms while any instance is still in startup (Starting/Ready, not yet Healthy). The fast startup tier collapses cold-start probe slack from up to 1 s to ~100 ms without paying high-frequency probes at steady state.
 - **Probe endpoint**: App's configured health check path (default: `/status`) with `Host: tako.internal`
 - **Transport**: Probes use the instance's private TCP endpoint.
 - **Process exit fast path**: Before each probe, `try_wait()` checks if the process has exited. If so, the instance is immediately marked dead without waiting for the probe timeout.
