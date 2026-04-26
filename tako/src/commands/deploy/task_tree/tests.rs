@@ -509,3 +509,81 @@ fn deploy_task_tree_omits_startup_summary_lines() {
     assert!(!lines.iter().any(|line| line.contains("App")));
     assert!(!lines.iter().any(|line| line.contains("Env")));
 }
+
+#[test]
+fn release_step_renders_under_preparing() {
+    let controller = DeployTaskTreeController::new(&["la".to_string(), "nyc".to_string()], &[]);
+    controller.add_release_step("la", /* leader */ true);
+    controller.add_release_step("nyc", /* leader */ false);
+
+    let state = controller.state.lock().unwrap();
+    let la_preparing =
+        find_deploy_step(&state.deploys, "la", "preparing").expect("preparing step for la");
+    let release_la = la_preparing
+        .children
+        .iter()
+        .find(|c| c.id == deploy_task_step_id("la", "release"))
+        .expect("release step under la preparing");
+    assert_eq!(release_la.label, "Running release command");
+
+    let nyc_preparing =
+        find_deploy_step(&state.deploys, "nyc", "preparing").expect("preparing step for nyc");
+    let release_nyc = nyc_preparing
+        .children
+        .iter()
+        .find(|c| c.id == deploy_task_step_id("nyc", "release"))
+        .expect("release step under nyc preparing");
+    assert_eq!(release_nyc.label, "Waiting for release command");
+}
+
+#[test]
+fn add_release_step_is_idempotent() {
+    let controller = DeployTaskTreeController::new(&["la".to_string()], &[]);
+    controller.add_release_step("la", true);
+    controller.add_release_step("la", true);
+
+    let state = controller.state.lock().unwrap();
+    let preparing = find_deploy_step(&state.deploys, "la", "preparing").expect("preparing step");
+    let release_count = preparing
+        .children
+        .iter()
+        .filter(|c| c.id == deploy_task_step_id("la", "release"))
+        .count();
+    assert_eq!(release_count, 1, "release sub-step should not duplicate");
+}
+
+#[test]
+fn cancel_release_step_sets_cancelled_state() {
+    let controller = DeployTaskTreeController::new(&["la".to_string()], &[]);
+    controller.add_release_step("la", false);
+    controller.cancel_release_step("la", "leader failed");
+
+    let state = controller.state.lock().unwrap();
+    let preparing = find_deploy_step(&state.deploys, "la", "preparing").unwrap();
+    let release = preparing
+        .children
+        .iter()
+        .find(|c| c.id == deploy_task_step_id("la", "release"))
+        .expect("release step");
+    assert!(
+        matches!(release.state, crate::ui::TaskState::Cancelled { .. }),
+        "expected Cancelled, got {:?}",
+        release.state
+    );
+    assert_eq!(release.detail.as_deref(), Some("leader failed"));
+}
+
+fn find_deploy_step<'a>(
+    deploys: &'a [crate::ui::TaskItemState],
+    server_name: &str,
+    step: &str,
+) -> Option<&'a crate::ui::TaskItemState> {
+    let server_id = deploy_target_task_id(server_name);
+    let step_id = deploy_task_step_id(server_name, step);
+    deploys
+        .iter()
+        .find(|t| t.id == server_id)?
+        .children
+        .iter()
+        .find(|c| c.id == step_id)
+}

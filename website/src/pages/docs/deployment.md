@@ -159,9 +159,10 @@ For each target server:
 5. **Upload + extract.** Stream the artifact, extract into the new release directory.
 6. **Sync secrets if needed.** CLI asks the server for its current secrets hash for this app. If it matches local, the deploy payload omits secrets (server keeps existing). If it differs, or the app is new, decrypted secrets ride along with the deploy command.
 7. **`prepare_release`.** Server downloads the pinned runtime binary (bun/node/deno) if needed and runs the production install (e.g. `bun install --production`).
-8. **`deploy`.** Server acquires a per-app, in-memory deploy lock, registers routes, and hands off to the rolling-update path. A second deploy for the same `{app}/{env}` on the same server fails immediately with `Deploy already in progress for app '{app}'. Please wait and try again.` The lock is in-memory only — restarting `tako-server` releases it and the interrupted deploy can simply be retried.
-9. **Rolling update.** Start new instance → wait for health pass (30s timeout) → add to load balancer → drain + stop old (30s timeout). Repeat until every instance is on the new build. See "Rolling updates" below.
-10. **Finalize.** Update `current -> releases/{version}` and clean up releases older than 30 days.
+8. **Release command (leader only).** If `release` is set in `tako.toml` (top-level or per-env), the leader server (first entry in `servers`) runs that command once inside the new release directory as `sh -c "<command>"`. All other servers block at their `Preparing` step until the leader publishes its result. On failure — non-zero exit or 10-minute timeout — the deploy aborts on every server: the new release directory is removed, the `current` symlink is not updated, and old instances keep serving. Common uses: database migrations, cache invalidation, config reloads.
+9. **`deploy`.** Server acquires a per-app, in-memory deploy lock, registers routes, and hands off to the rolling-update path. A second deploy for the same `{app}/{env}` on the same server fails immediately with `Deploy already in progress for app '{app}'. Please wait and try again.` The lock is in-memory only — restarting `tako-server` releases it and the interrupted deploy can simply be retried.
+10. **Rolling update.** Start new instance → wait for health pass (30s timeout) → add to load balancer → drain + stop old (30s timeout). Repeat until every instance is on the new build. See "Rolling updates" below.
+11. **Finalize.** Update `current -> releases/{version}` and clean up releases older than 30 days.
 
 If a deploy fails after creating the new release directory, `tako deploy` removes that partial release before returning the error — so a failed run doesn't leave half-unpacked directories around.
 

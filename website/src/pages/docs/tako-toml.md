@@ -260,6 +260,44 @@ For secrets (API keys, database URLs), use `tako secrets set` instead of `[vars]
 
 ---
 
+## Release command
+
+The optional top-level `release` field runs once during deploy on the **leader server** (first entry in the env's `servers` list) inside the new release directory, after the artifact is unpacked and production dependencies are installed, but **before** any rolling update starts. Common uses: database migrations, cache invalidation, config reloads.
+
+```toml
+release = "bun run db:migrate"
+
+[envs.production]
+route = "api.example.com"
+servers = ["la", "nyc"]
+
+[envs.staging]
+route = "staging.example.com"
+servers = ["staging"]
+release = "bun run db:migrate:staging"   # overrides top-level for this env
+```
+
+The command runs as `sh -c "<command>"` with cwd set to the new release directory. The environment is the same one HTTP instances see at spawn time:
+
+- merged `[vars]` and `[vars.<env>]`
+- decrypted secrets (injected as env vars for this one-shot run)
+- `TAKO_BUILD`, `TAKO_DATA_DIR`, `ENV`
+- runtime defaults (`NODE_ENV` for JS runtimes, etc.)
+
+**Per-env override rules:**
+
+- `[envs.<env>].release` overrides the top-level `release` for that env.
+- An empty string (`release = ""`) explicitly clears the inherited value for that env — useful when most envs need migrations but one doesn't.
+- Whitespace-only commands are treated as "no release command".
+
+**Failure handling:**
+
+- The release command has a hard 10-minute timeout. On timeout, it is killed and the deploy fails.
+- A non-zero exit aborts the deploy on every server. The new release directory is removed on each server, the `current` symlink is not updated, and old instances keep serving.
+- Followers (non-leader servers) wait for the leader's result before proceeding into rolling update. If the leader fails, followers cancel cleanly.
+
+---
+
 ## `[envs.<env>]`
 
 Declare environments, routes, and server targeting. Every non-development environment must define at least one route.
@@ -319,7 +357,7 @@ idle_timeout = 300
 
 ### Accepted keys
 
-`[envs.<env>]` accepts only `route`, `routes`, `servers`, and `idle_timeout`. Unknown keys are rejected — env vars belong in `[vars]` / `[vars.<env>]`, not here.
+`[envs.<env>]` accepts only `route`, `routes`, `servers`, `idle_timeout`, and `release`. Unknown keys are rejected — env vars belong in `[vars]` / `[vars.<env>]`, not here.
 
 ---
 
@@ -428,7 +466,7 @@ Quick reference of the constraints Tako enforces when loading `tako.toml`.
 | `[[build_stages]].run`          | Required.                                                                                                                 |
 | Routes                          | Must include hostname; each env uses `route` or `routes`, not both; non-dev envs require at least one route.              |
 | Dev routes                      | Must be `{app}.test`, `{app}.tako.test`, or a subdomain of either.                                                        |
-| `[envs.<env>]` keys             | Only `route`, `routes`, `servers`, `idle_timeout`.                                                                        |
+| `[envs.<env>]` keys             | Only `route`, `routes`, `servers`, `idle_timeout`, `release`.                                                             |
 | `ENV` var                       | Reserved; setting it in `[vars]` is ignored with a warning.                                                               |
 | `servers` under `[envs.<env>]`  | Each name must exist in global `config.toml`; `development` servers are ignored.                                          |
 | `workflows` under `[servers]`   | Reserved name — cannot be used as a server name.                                                                          |
@@ -465,6 +503,10 @@ install = "bun install"
 # include = ["dist/**/*", "public/**/*"]
 # exclude = ["**/*.map"]
 
+# Run once on the leader server after extract + install, before rolling update.
+# Per-env override: set [envs.<env>].release = "" to clear for a specific env.
+release = "bun run db:migrate"
+
 # Base vars — applied to every environment.
 [vars]
 LOG_LEVEL = "info"
@@ -483,8 +525,9 @@ route = "api.example.com"
 servers = ["la", "nyc"]
 idle_timeout = 300
 
-# Staging environment with multiple routes.
+# Staging environment with multiple routes and its own release command.
 [envs.staging]
+release = "bun run db:migrate:staging"
 routes = [
   "staging.example.com",
   "www.staging.example.com",

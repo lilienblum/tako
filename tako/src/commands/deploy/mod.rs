@@ -57,6 +57,15 @@ struct DeployConfig {
     secrets_hash: String,
     main: String,
     use_unified_target_process: bool,
+
+    /// Resolved release command (None when no release step). Sent only
+    /// to the leader server; followers wait on the result.
+    release_command: Option<String>,
+
+    /// Server name that runs the release command. Always
+    /// `target_servers.first()` — kept here so per-server code can
+    /// compare without re-deriving.
+    leader_server: String,
 }
 
 #[derive(Clone)]
@@ -107,6 +116,26 @@ impl Drop for ProjectDeployLock {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
     }
+}
+
+/// Resolve the effective release command for an environment.
+///
+/// Precedence:
+/// 1. `[envs.<env>].release` if set (including empty string, which clears).
+/// 2. Top-level `release` if set.
+/// 3. None.
+///
+/// An empty string (top-level or per-env) yields `None`.
+pub(super) fn resolve_release_command(config: &TakoToml, env_name: &str) -> Option<String> {
+    let candidate = config
+        .envs
+        .get(env_name)
+        .and_then(|e| e.release.clone())
+        .or_else(|| config.release.clone());
+    candidate.and_then(|s| {
+        let trimmed = s.trim();
+        if trimmed.is_empty() { None } else { Some(s) }
+    })
 }
 
 impl DeployConfig {
@@ -395,6 +424,11 @@ async fn run_async(
 
     let secrets_hash = tako_core::compute_secrets_hash(&deploy_secrets);
     let deployment_app_name = tako_core::deployment_app_id(&app_name, &env);
+    let leader_server = server_names
+        .first()
+        .cloned()
+        .ok_or("no servers selected for deploy")?;
+    let release_command = resolve_release_command(&tako_config, &env);
     let deploy_config = Arc::new(DeployConfig {
         app_name: deployment_app_name.clone(),
         version: version.clone(),
@@ -404,6 +438,8 @@ async fn run_async(
         secrets_hash,
         main: manifest_main,
         use_unified_target_process: use_unified_js_target_process,
+        release_command,
+        leader_server,
     });
     let target_by_server: HashMap<String, ServerTarget> = server_targets.into_iter().collect();
 
@@ -435,6 +471,19 @@ async fn run_async(
         output::info(&format_parallel_deploy_step(targets.len()));
     }
 
+    // Watch channel: leader publishes the release-command result; followers
+    // observe it before proceeding into Starting. Sender is not Clone, so
+    // it moves into the leader's spawned task via `take()`. Receiver is
+    // Clone — followers each get their own clone.
+    type ReleaseSignal = Option<Result<(), String>>;
+    let (mut release_tx, release_rx_template) = if deploy_config.release_command.is_some() {
+        let (tx, rx) = tokio::sync::watch::channel::<ReleaseSignal>(None);
+        (Some(tx), Some(rx))
+    } else {
+        (None, None)
+    };
+    let leader_server_name = deploy_config.leader_server.clone();
+
     // Spawn parallel deploy tasks
     let mut handles = Vec::new();
     for target in &targets {
@@ -446,6 +495,15 @@ async fn run_async(
         let use_spinner = use_per_server_spinners;
         let task_tree = deploy_task_tree.clone();
         let preconnected_ssh = preflight_ssh_clients.remove(&server_name);
+
+        let is_leader = target.name == leader_server_name;
+        let release_tx_for_task = if is_leader { release_tx.take() } else { None };
+        let release_rx_for_task = if !is_leader {
+            release_rx_template.clone()
+        } else {
+            None
+        };
+
         let span = output::scope(&server_name);
         let handle = tokio::spawn(
             async move {
@@ -458,6 +516,8 @@ async fn run_async(
                     use_spinner,
                     task_tree,
                     preconnected_ssh,
+                    release_tx_for_task,
+                    release_rx_for_task,
                 )
                 .await;
                 (server_name, server, result)
@@ -634,6 +694,65 @@ fn read_deploy_lock_pid(file: &mut File) -> Option<u32> {
 }
 
 #[cfg(test)]
+mod release_resolution_tests {
+    use super::*;
+    use crate::config::EnvConfig;
+    use std::collections::HashMap;
+
+    fn config_with(top: Option<&str>, env_release: Option<Option<&str>>) -> TakoToml {
+        let mut cfg = TakoToml::default();
+        cfg.release = top.map(String::from);
+        let mut envs = HashMap::new();
+        let mut env_cfg = EnvConfig::default();
+        env_cfg.route = Some("api.example.com".into());
+        env_cfg.servers = vec!["la".into()];
+        env_cfg.release = env_release.map(|opt| opt.unwrap_or("").to_string());
+        envs.insert("production".to_string(), env_cfg);
+        cfg.envs = envs;
+        cfg
+    }
+
+    #[test]
+    fn env_release_overrides_top_level() {
+        let cfg = config_with(Some("bun migrate"), Some(Some("bun migrate:prod")));
+        assert_eq!(
+            resolve_release_command(&cfg, "production"),
+            Some("bun migrate:prod".to_string())
+        );
+    }
+
+    #[test]
+    fn env_release_falls_back_to_top_level() {
+        let cfg = config_with(Some("bun migrate"), None);
+        assert_eq!(
+            resolve_release_command(&cfg, "production"),
+            Some("bun migrate".to_string())
+        );
+    }
+
+    #[test]
+    fn empty_env_release_clears_top_level() {
+        let cfg = config_with(Some("bun migrate"), Some(Some("")));
+        assert_eq!(resolve_release_command(&cfg, "production"), None);
+    }
+
+    #[test]
+    fn no_release_returns_none() {
+        let cfg = config_with(None, None);
+        assert_eq!(resolve_release_command(&cfg, "production"), None);
+    }
+
+    #[test]
+    fn missing_env_falls_back_to_top_level() {
+        let cfg = config_with(Some("bun migrate"), None);
+        assert_eq!(
+            resolve_release_command(&cfg, "staging"),
+            Some("bun migrate".to_string())
+        );
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
@@ -650,6 +769,8 @@ mod tests {
             secrets_hash: String::new(),
             main: "index.ts".to_string(),
             use_unified_target_process: false,
+            release_command: None,
+            leader_server: String::new(),
         };
         assert_eq!(cfg.release_dir(), "/opt/tako/apps/my-app/releases/v1");
         assert_eq!(cfg.current_link(), "/opt/tako/apps/my-app/current");

@@ -263,6 +263,9 @@ pub(super) fn build_remote_extract_archive_command(
 /// connection is reused and the "Preflight" task-tree step is skipped (it was
 /// already marked complete during preflight).  Otherwise a fresh SSH connection
 /// is established here.
+///
+/// `release_tx` is `Some` only for the leader server when a release command is
+/// configured. `release_rx` is `Some` only for follower servers in that case.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn deploy_to_server(
     config: &DeployConfig,
@@ -273,6 +276,8 @@ pub(super) async fn deploy_to_server(
     use_spinner: bool,
     task_tree: Option<DeployTaskTreeController>,
     preconnected_ssh: Option<SshClient>,
+    release_tx: Option<tokio::sync::watch::Sender<Option<Result<(), String>>>>,
+    release_rx: Option<tokio::sync::watch::Receiver<Option<Result<(), String>>>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let _server_deploy_timer =
         output::timed(&format!("Server deploy ({target_label}:{})", server.port));
@@ -486,6 +491,97 @@ pub(super) async fn deploy_to_server(
         } else if let Some(task_tree) = &task_tree {
             task_tree.skip_deploy_step(server_name, "preparing", "skipped");
         }
+
+        // === Release-command step (leader runs, followers wait) ===
+        if let Some(command_line) = &config.release_command {
+            let is_leader = server_name == config.leader_server;
+
+            if let Some(task_tree) = &task_tree {
+                task_tree.add_release_step(server_name, is_leader);
+            }
+
+            if is_leader {
+                if let Some(task_tree) = &task_tree {
+                    task_tree.mark_release_step_running(server_name);
+                }
+                let cmd = Command::RunRelease {
+                    app: config.app_name.clone(),
+                    version: config.version.clone(),
+                    path: release_dir.clone(),
+                    command_line: command_line.clone(),
+                    vars: std::collections::HashMap::new(),
+                    secrets: std::collections::HashMap::new(),
+                };
+                let json = serde_json::to_string(&cmd)
+                    .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+                let response_text = ssh
+                    .tako_command(&json)
+                    .await
+                    .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+
+                if deploy_response_has_error(&response_text) {
+                    let msg = extract_server_error_message(&response_text);
+                    // Broadcast failure to followers so they cancel cleanly.
+                    if let Some(sender) = &release_tx {
+                        let _ = sender.send(Some(Err(msg.clone())));
+                    }
+                    if let Some(task_tree) = &task_tree {
+                        task_tree.fail_release_step(server_name, msg.clone());
+                    }
+                    // Leader's own partial release dir cleanup before bubbling up.
+                    if !release_dir_preexisted {
+                        let _ = cleanup_partial_release(&ssh, &release_dir).await;
+                    }
+                    return Err(format_deploy_step_failure("Release command", &msg).into());
+                }
+
+                if let Some(task_tree) = &task_tree {
+                    task_tree.succeed_release_step(server_name, None);
+                }
+                if let Some(sender) = &release_tx {
+                    let _ = sender.send(Some(Ok(())));
+                }
+            } else {
+                // Follower: wait for the leader to publish a result.
+                let mut rx = release_rx.expect("followers must hold a receiver");
+                loop {
+                    // Snapshot the current value first so we don't miss a result
+                    // that was published before this code ran.
+                    let current = rx.borrow().clone();
+                    if let Some(result) = current {
+                        match result {
+                            Ok(()) => {
+                                if let Some(task_tree) = &task_tree {
+                                    task_tree.succeed_release_step(server_name, None);
+                                }
+                                break;
+                            }
+                            Err(msg) => {
+                                if let Some(task_tree) = &task_tree {
+                                    task_tree.cancel_release_step(server_name, "leader failed");
+                                }
+                                if !release_dir_preexisted {
+                                    let _ = cleanup_partial_release(&ssh, &release_dir).await;
+                                }
+                                return Err(format_deploy_step_failure(
+                                    "Release command (leader)",
+                                    &msg,
+                                )
+                                .into());
+                            }
+                        }
+                    }
+                    if rx.changed().await.is_err() {
+                        // Sender dropped without sending — treat as cancel.
+                        if let Some(task_tree) = &task_tree {
+                            task_tree.cancel_release_step(server_name, "release cancelled");
+                        }
+                        return Err("Release command cancelled".into());
+                    }
+                }
+            }
+        }
+
         tracing::debug!(
             "{}",
             super::format::format_deploy_main_message(

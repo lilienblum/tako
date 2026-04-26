@@ -49,6 +49,7 @@ pub(super) enum DeployCompletionKind {
     Succeeded,
     Skipped,
     Failed,
+    Cancelled,
 }
 
 impl DeployTaskTreeController {
@@ -261,6 +262,54 @@ impl DeployTaskTreeController {
         );
     }
 
+    /// Add a release-command sub-step under a server's `Preparing` task.
+    /// `is_leader = true` shows the active "Running release command" row;
+    /// `is_leader = false` shows the muted "Waiting for release command" row.
+    pub(super) fn add_release_step(&self, server_name: &str, is_leader: bool) {
+        let parent_id = deploy_task_step_id(server_name, "preparing");
+        let child_id = deploy_task_step_id(server_name, "release");
+        let label = if is_leader {
+            "Running release command"
+        } else {
+            "Waiting for release command"
+        };
+        let mut state = self.state.lock().unwrap();
+        let parent = find_task_mut(&mut state.deploys, &parent_id)
+            .unwrap_or_else(|| panic!("missing preparing step for {server_name}"));
+        if parent.find(&child_id).is_none() {
+            parent.append_child(TaskItemState::pending(child_id, label));
+        }
+        self.refresh_locked(&state);
+    }
+
+    pub(super) fn mark_release_step_running(&self, server_name: &str) {
+        self.mark_running_by_id(&deploy_task_step_id(server_name, "release"));
+    }
+
+    pub(super) fn succeed_release_step(&self, server_name: &str, detail: Option<String>) {
+        self.complete_by_id(
+            &deploy_task_step_id(server_name, "release"),
+            detail,
+            DeployCompletionKind::Succeeded,
+        );
+    }
+
+    pub(super) fn fail_release_step(&self, server_name: &str, detail: impl Into<String>) {
+        self.complete_by_id(
+            &deploy_task_step_id(server_name, "release"),
+            Some(detail.into()),
+            DeployCompletionKind::Failed,
+        );
+    }
+
+    pub(super) fn cancel_release_step(&self, server_name: &str, reason: impl Into<String>) {
+        self.complete_by_id(
+            &deploy_task_step_id(server_name, "release"),
+            Some(reason.into()),
+            DeployCompletionKind::Cancelled,
+        );
+    }
+
     pub(super) fn rename_deploy_step(&self, server_name: &str, step: &str, new_label: &str) {
         self.update_by_id(&deploy_task_step_id(server_name, step), |task| {
             task.label = new_label.to_string();
@@ -338,6 +387,7 @@ impl DeployTaskTreeController {
                 DeployCompletionKind::Succeeded => TaskState::Succeeded { elapsed },
                 DeployCompletionKind::Skipped => TaskState::Skipped { elapsed },
                 DeployCompletionKind::Failed => TaskState::Failed { elapsed },
+                DeployCompletionKind::Cancelled => TaskState::Cancelled { elapsed },
             };
             task.detail = detail;
             task.progress = None;

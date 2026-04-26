@@ -52,6 +52,7 @@ package_manager = "bun"      # Optional override; auto-detected from package.jso
 preset = "tanstack-start"   # Optional app preset; provides `main`, `assets`, and `dev` defaults
 dev = ["vite", "dev"]        # Optional custom dev command override
 assets = ["dist/client"]     # Optional asset directories for deploy artifact
+release = "bun run db:migrate"   # Optional release command (run once on the leader server before rolling update)
 
 [build]
 run = "vinxi build"       # Build command
@@ -116,6 +117,21 @@ idle_timeout = 120
 - Top-level `preset` is optional. Presets are metadata-only (`name`, `main`, `assets`, `dev`) providing entrypoint, asset, and dev-command defaults. They do not contain build, install, or start commands.
 - Top-level `dev` is optional; when set (e.g. `["vite", "dev"]`), it overrides both preset and runtime default dev commands for `tako dev`.
 - Top-level `assets` is optional; lists asset directories to include in the deploy artifact (e.g. `["dist/client"]`). Asset roots are preset `assets` plus top-level `assets` (deduplicated).
+- Top-level `release` is optional. When set, deploy runs the command once
+  on the **leader server** (first entry in `[envs.<env>].servers`) inside
+  the new release directory after extract + production install but
+  before any rolling update.
+- `[envs.<env>].release` overrides the top-level value for that
+  environment. An empty string (`release = ""`) explicitly clears the
+  inherited top-level command for that env.
+- The release command runs as `sh -c "<command>"` with cwd set to the
+  new release directory and the same env an HTTP instance receives
+  (merged `[vars]` + `[vars.<env>]` + secrets + `TAKO_BUILD` +
+  `TAKO_DATA_DIR` + `ENV` + runtime defaults). Secrets are injected as
+  env vars (release commands are one-shot; the fd 3 mechanism is
+  reserved for long-running app/worker processes).
+- Hard timeout: 10 minutes per release-command invocation. On timeout,
+  the process is killed and deploy fails.
 - `preset` supports:
   - runtime-local aliases: `tanstack-start`, `nextjs` (resolved under selected runtime, e.g. `runtime = "bun"`)
   - pinned runtime-local aliases: `tanstack-start@<commit-hash>`, `nextjs@<commit-hash>`
@@ -799,6 +815,12 @@ Deploy flow helpers:
   - sub task failures may render their related error detail on an indented line below the failed sub task
   - if a connection check or build step fails, deploy aborts the remaining incomplete pretty task-tree rows and marks them as `Aborted` instead of leaving them pending
   - verbose and CI deploy output stay transcript-style and only print work as it is happening
+  - When `release` is configured for the resolved env, deploy adds a
+    release sub-step under each server's `Preparing` task. The leader's
+    row reads `Running release command`; followers' rows read
+    `Waiting for release command` and resolve once the leader finishes.
+    On leader failure, followers' rows are marked `Cancelled` with a
+    `leader failed` detail.
 
 **Steps:**
 
@@ -818,14 +840,26 @@ Deploy flow helpers:
    - Version format: clean git tree => `{commit}`; dirty git tree => `{commit}_{source_hash8}`; no git commit => `nogit_{source_hash8}`
    - Best-effort local artifact cache prune runs before builds (retention: 90 target artifacts; orphan target metadata is removed)
    - Package filtered artifact tarball using include/exclude rules and store in local cache
-9. Deploy to all servers in parallel:
+9. On all servers in parallel: upload artifact, extract, and run production install
    - Require `tako-server` to be pre-installed and running on each server
    - Upload and extract target-specific artifact
    - Query server for the app's current secrets hash; if it matches the local secrets hash, skip sending secrets (server keeps existing). If hashes differ (or app is new), include decrypted secrets in the deploy command.
-   - Send deploy command with routes and optional secrets payload
-   - `tako-server` acquires a per-app deploy lock in memory, reads non-secret runtime/app config from release `app.json`, creates per-app runtime data directories, injects runtime vars (`TAKO_BUILD`, `TAKO_DATA_DIR`) into HTTP instances and workflow workers, runs the runtime plugin's production install command, and performs first start or rolling update
+   - `tako-server` acquires a per-app deploy lock in memory, reads non-secret runtime/app config from release `app.json`, creates per-app runtime data directories, and runs the runtime plugin's production install command
    - If another deploy for the same app environment is already running on that server, the deploy command fails immediately with a retry message
-   - Update `current` symlink and clean up old releases (>30 days)
+10. Run release command on the leader server (when configured):
+    - If `release` is configured for the resolved env, the leader server
+      runs `sh -c "<command>"` once inside the new release directory.
+      Followers' `Preparing` task blocks until the leader publishes its
+      result.
+    - On success, all servers proceed into rolling update (existing
+      behavior).
+    - On failure (non-zero exit, timeout, or signal), deploy aborts on
+      every server. The existing partial-release cleanup removes the new
+      release directory on each server. The `current` symlink is not
+      updated; old instances keep serving.
+11. Rolling update and finalize on all servers:
+    - `tako-server` performs first start or rolling update
+    - Update `current` symlink and clean up old releases (>30 days)
 
 **Version naming:**
 
@@ -861,6 +895,9 @@ Deploy flow helpers:
 - A second deploy command for the same app environment on the same server fails immediately with `Deploy already in progress for app '{app}'. Please wait and try again.`
 - No `.deploy_lock` directory is written to disk
 - Restarting `tako-server` clears the lock; the interrupted deploy fails and can be retried without manual lock cleanup
+- The same per-app deploy lock guards the release command; a concurrent
+  deploy attempt for the same app sees the existing
+  "Deploy already in progress" error.
 
 **Rolling update (per server):**
 
@@ -905,6 +942,8 @@ When the stored desired instance count is `0`, rolling deploy still starts one w
   - multiple servers in `config.toml` `[[servers]]` (interactive terminal) → prompt to select one and persist it into `[envs.production].servers`
 - If no servers exist in `config.toml` `[[servers]]` → fail with hint to run `tako servers add <host>`
 - Otherwise, require explicit `[envs.<env>].servers` mapping in tako.toml
+
+**Release command test coverage note:** End-to-end coverage for `release` (docker compose harness with success and failure fixtures) is deferred. Behavior is currently verified by Rust unit tests at the runner, dispatch, resolver, orchestration, and task-tree layers.
 
 ### tako releases ls [--env {environment}]
 
@@ -1288,6 +1327,14 @@ Response:
 ```json
 { "command": "get_secrets_hash", "app": "my-app/production" }
 ```
+
+- **`RunRelease`** — Run a one-shot release command on this server for
+  the given release. Sent only to the leader server. Validates the app
+  name and release version, acquires the per-app deploy lock, merges
+  non-secret env from `app.json` + `TAKO_BUILD` + `TAKO_DATA_DIR` +
+  stored secrets + parent `PATH`, and runs `sh -c "<command_line>"` in
+  the release directory. Returns the exit code on success or an error
+  response with stderr tail on non-zero exit / timeout.
 
 Server-side validation on `deploy` and app-scoped commands:
 

@@ -39,6 +39,27 @@ pub enum Command {
     /// and instance startup, keeping it fast.
     PrepareRelease { app: String, path: String },
 
+    /// Run a one-shot release command on this server for the given
+    /// release. Used during deploy to run migrations / cache invalidation
+    /// before any rolling update starts. The CLI sends this only to the
+    /// leader server when a `release` command is configured.
+    RunRelease {
+        app: String,
+        version: String,
+        path: String,
+        /// Shell command line; runs as `sh -c "<command_line>"`.
+        command_line: String,
+        /// Non-secret env vars (matches the env that HTTP instances receive).
+        #[serde(default)]
+        vars: HashMap<String, String>,
+        /// Decrypted secrets, injected as env vars for the duration of
+        /// this one-shot. Long-running app processes still receive secrets
+        /// via fd 3; release commands are short-lived and use env vars
+        /// instead.
+        #[serde(default)]
+        secrets: HashMap<String, String>,
+    },
+
     /// Deploy a new version of an app
     Deploy {
         app: String,
@@ -875,6 +896,41 @@ mod tests {
         match parsed {
             Command::Deploy { secrets, .. } => assert!(secrets.is_none()),
             _ => panic!("Expected deploy command"),
+        }
+    }
+
+    #[test]
+    fn parses_run_release_command() {
+        let json = r#"{
+            "command": "run_release",
+            "app": "my-app",
+            "version": "abc1234",
+            "path": "/var/lib/tako/my-app/releases/abc1234",
+            "command_line": "bun run db:migrate",
+            "vars": {"NODE_ENV": "production"},
+            "secrets": {"DATABASE_URL": "postgres://x"}
+        }"#;
+        let cmd: Command = serde_json::from_str(json).unwrap();
+        match cmd {
+            Command::RunRelease {
+                app,
+                version,
+                path,
+                command_line,
+                vars,
+                secrets,
+            } => {
+                assert_eq!(app, "my-app");
+                assert_eq!(version, "abc1234");
+                assert!(path.contains("releases"));
+                assert_eq!(command_line, "bun run db:migrate");
+                assert_eq!(vars.get("NODE_ENV").map(String::as_str), Some("production"));
+                assert_eq!(
+                    secrets.get("DATABASE_URL").map(String::as_str),
+                    Some("postgres://x")
+                );
+            }
+            _ => panic!("Expected RunRelease command"),
         }
     }
 

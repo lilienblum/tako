@@ -231,6 +231,25 @@ The re-add captures `arch` and `libc` via SSH.
 - Dependencies resolve without dev tools or private registries that aren't reachable from the server.
 - Any postinstall scripts work in a headless environment.
 
+### "Release command exit N" / "Release command timed out"
+
+**Symptom:** deploy aborts with a release command failure. The new release directory is removed on every server; old instances keep serving.
+
+**Fix:**
+
+1. Tail the deploy output for the stderr of the failed command. Run with `--verbose` for the full transcript.
+2. Fix the underlying issue (failing migration, missing secret, unresolvable dependency, etc.).
+3. Re-run `tako deploy`.
+
+The release command runs on the leader server only, inside the new release directory, with the same environment the app sees at spawn time (merged vars, decrypted secrets, `TAKO_BUILD`, `TAKO_DATA_DIR`, `ENV`). The hard timeout is 10 minutes; exiting non-zero or exceeding it both abort every server.
+
+To deploy without running the release step in an emergency, blank the field for the target env in `tako.toml` and redeploy:
+
+```toml
+[envs.production]
+release = ""   # explicitly clears the inherited top-level release command
+```
+
 ### Artifact cache issues
 
 **Symptom:** repeated deploys rebuild unexpectedly, or you see a cache-invalidated warning.

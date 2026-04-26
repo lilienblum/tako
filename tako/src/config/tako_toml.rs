@@ -57,6 +57,11 @@ pub struct Config {
     #[serde(default)]
     pub envs: HashMap<String, EnvConfig>,
 
+    /// Release command run once on the deploy leader server during the "Preparing"
+    /// phase, before any rolling update starts (e.g. `"bun run db:migrate"`).
+    /// Can be overridden per environment via `[envs.<name>].release`.
+    pub release: Option<String>,
+
     /// [servers.*] sections - per-app-per-server configuration.
     ///
     /// The reserved key `workflows` under `[servers]` is the default workflows
@@ -131,6 +136,10 @@ pub struct EnvConfig {
     /// Idle timeout in seconds (300 = 5 minutes).
     #[serde(default = "default_idle_timeout")]
     pub idle_timeout: u32,
+
+    /// Per-environment release command override. An empty string explicitly
+    /// clears the top-level `release` command for this environment.
+    pub release: Option<String>,
 }
 
 fn default_idle_timeout() -> u32 {
@@ -238,6 +247,7 @@ impl Config {
         let preset = parse_optional_string(&raw, "preset")?;
         let dev = parse_string_array(&raw, "dev")?.unwrap_or_default();
         let assets = parse_string_array(&raw, "assets")?.unwrap_or_default();
+        let release = parse_optional_string(&raw, "release")?;
         let build = parse_build_config(&raw)?;
         let build_stages = parse_build_stages(&raw)?;
         let mut config = Config {
@@ -249,6 +259,7 @@ impl Config {
             preset,
             dev,
             assets,
+            release,
             build,
             build_stages,
             ..Config::default()
@@ -685,6 +696,7 @@ fn validate_top_level_keys(raw: &toml::Value) -> Result<()> {
                 | "dev"
                 | "main"
                 | "assets"
+                | "release"
                 | "build"
                 | "build_stages"
                 | "vars"
@@ -2380,5 +2392,72 @@ include = ["dist/**"]
         assert_eq!(config.build.install, Some("bun install".to_string()));
         assert_eq!(config.build.cwd, Some(".".to_string()));
         assert_eq!(config.build.include, vec!["dist/**".to_string()]);
+    }
+
+    #[test]
+    fn parses_top_level_release() {
+        let toml = r#"
+name = "my-app"
+release = "bun run db:migrate"
+"#;
+        let config = Config::parse(toml).unwrap();
+        assert_eq!(config.release.as_deref(), Some("bun run db:migrate"));
+    }
+
+    #[test]
+    fn release_is_none_when_unset() {
+        let config = Config::parse(r#"name = "my-app""#).unwrap();
+        assert!(config.release.is_none());
+    }
+
+    #[test]
+    fn parses_per_env_release_override() {
+        let toml = r#"
+name = "my-app"
+release = "bun run db:migrate"
+
+[envs.production]
+route = "api.example.com"
+servers = ["la"]
+release = "bun run db:migrate:prod"
+
+[envs.staging]
+route = "staging.example.com"
+servers = ["staging"]
+"#;
+        let config = Config::parse(toml).unwrap();
+        let prod = config.envs.get("production").unwrap();
+        assert_eq!(prod.release.as_deref(), Some("bun run db:migrate:prod"));
+        let staging = config.envs.get("staging").unwrap();
+        assert!(staging.release.is_none());
+    }
+
+    #[test]
+    fn empty_release_string_is_preserved() {
+        // An empty per-env release explicitly blanks the inherited top-level value.
+        let toml = r#"
+release = "bun run db:migrate"
+
+[envs.production]
+route = "api.example.com"
+servers = ["la"]
+release = ""
+"#;
+        let config = Config::parse(toml).unwrap();
+        let prod = config.envs.get("production").unwrap();
+        assert_eq!(prod.release.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn rejects_unknown_key_release_command() {
+        // Sanity: a typo should still fail (deny_unknown_fields stays in effect).
+        let toml = r#"
+[envs.production]
+route = "api.example.com"
+servers = ["la"]
+release_command = "bun run db:migrate"
+"#;
+        let err = Config::parse(toml).unwrap_err();
+        assert!(format!("{err}").contains("release_command"), "{err}");
     }
 }

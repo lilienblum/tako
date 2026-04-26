@@ -227,7 +227,7 @@ Interactive `production` deploys require explicit confirmation unless `--yes` is
 5. Copy the project into `.tako/build` (respecting `.gitignore`) and symlink `node_modules/` in.
 6. Run `[[build_stages]]` → `[build]` → runtime default, in that precedence order. Each stage runs `install` then `run`. Merge asset roots into `public/`.
 7. Archive the build dir (excluding `node_modules/`) into a target-specific artifact and cache it locally.
-8. Deploy in parallel to every mapped server: upload, extract, query/send secrets, then rolling update.
+8. Deploy in parallel to every mapped server: upload, extract, query/send secrets, run the release command on the leader (if `release` is configured — see [tako-toml.md](/docs/tako-toml#release-command)), then rolling update.
 9. Update `current` symlink, prune releases older than 30 days, and report.
 
 Interactive progress shows tasks and sub tasks as a live tree: `Connecting` and `Building` start together after planning, then one `Deploying to <server>` task per target server with sub tasks for `Uploading`, `Preparing`, and `Starting`. Verbose and CI deploys stay transcript-style.

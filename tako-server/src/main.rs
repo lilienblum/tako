@@ -20,6 +20,7 @@ mod paths;
 mod protocol;
 mod proxy;
 mod release;
+mod release_command;
 mod routing;
 mod runtime_events;
 mod scaling;

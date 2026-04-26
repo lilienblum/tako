@@ -52,6 +52,22 @@ impl super::ServerState {
                 }
                 self.prepare_release(&app, &path).await
             }
+            Command::RunRelease {
+                app,
+                version,
+                path,
+                command_line,
+                vars: _,
+                secrets: _,
+            } => {
+                if let Err(msg) = validate_app_name(&app) {
+                    return Response::error(msg);
+                }
+                if let Err(msg) = validate_release_version(&version) {
+                    return Response::error(msg);
+                }
+                self.run_release(&app, &version, &path, &command_line).await
+            }
             Command::Deploy {
                 app,
                 version,
@@ -225,6 +241,83 @@ impl super::ServerState {
         match prepare_release_runtime(&release_path, &release_env, &self.runtime.data_dir).await {
             Ok(_) => Response::ok(serde_json::json!({ "status": "prepared" })),
             Err(error) => Response::error(format!("Release preparation failed: {error}")),
+        }
+    }
+
+    async fn run_release(
+        &self,
+        app_name: &str,
+        version: &str,
+        path: &str,
+        command_line: &str,
+    ) -> Response {
+        use crate::release_command;
+
+        if command_line.trim().is_empty() {
+            return Response::error("Release command is empty".to_string());
+        }
+        let release_path =
+            match validate_release_path_for_app(&self.runtime.data_dir, app_name, path) {
+                Ok(value) => value,
+                Err(msg) => return Response::error(msg),
+            };
+
+        // Acquire the per-app deploy lock so the release command runs inside
+        // the same logical deploy transaction. A concurrent deploy or release
+        // attempt for the same app sees the existing "already in progress"
+        // error.
+        let lock = self.get_deploy_lock(app_name).await;
+        let _guard = match lock.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                return Response::error(format!(
+                    "Deploy already in progress for app '{}'. Please wait and try again.",
+                    app_name
+                ));
+            }
+        };
+
+        let env_vars = match env_vars_from_release_dir(&release_path) {
+            Ok(vars) => vars,
+            Err(error) => return Response::error(format!("Invalid app release: {}", error)),
+        };
+        let secrets = self.state_store.get_secrets(app_name).unwrap_or_default();
+        let data_paths = match ensure_app_runtime_data_dirs(&self.runtime.data_dir, app_name) {
+            Ok(paths) => paths,
+            Err(error) => {
+                return Response::error(format!("Failed to create app data dirs: {error}"));
+            }
+        };
+
+        let mut env = env_vars;
+        inject_app_data_dir_env(&mut env, &data_paths);
+        env.insert("TAKO_BUILD".to_string(), version.to_string());
+        env.extend(secrets);
+        if let Ok(path) = std::env::var("PATH") {
+            env.entry("PATH".to_string()).or_insert(path);
+        }
+
+        match release_command::run(command_line, &release_path, &env).await {
+            Err(spawn_err) => Response::error(format!("Release command failed: {spawn_err}")),
+            Ok(outcome) if outcome.succeeded() => Response::ok(serde_json::json!({
+                "status": "released",
+                "exit_code": 0,
+                "stdout_tail": tail_string(&outcome.stdout, 4_000),
+                "stderr_tail": tail_string(&outcome.stderr, 4_000),
+            })),
+            Ok(outcome) if outcome.timed_out => Response::error(format!(
+                "Release command timed out after {}s\n--- stderr ---\n{}",
+                release_command::RELEASE_COMMAND_TIMEOUT.as_secs(),
+                tail_string(&outcome.stderr, 4_000),
+            )),
+            Ok(outcome) => Response::error(format!(
+                "Release command exit {}\n--- stderr ---\n{}",
+                outcome
+                    .exit_code
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "?".into()),
+                tail_string(&outcome.stderr, 4_000),
+            )),
         }
     }
 
@@ -981,4 +1074,12 @@ impl super::ServerState {
             }
         }
     }
+}
+
+fn tail_string(s: &str, max_bytes: usize) -> String {
+    if s.len() <= max_bytes {
+        return s.to_string();
+    }
+    let start = s.len() - max_bytes;
+    format!("…{}", &s[start..])
 }
