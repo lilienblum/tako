@@ -18,12 +18,38 @@ App-scoped commands (`dev`, `deploy`, `secrets`, `logs`, `scale`, `delete`, `rel
 
 ## Minimal Config
 
-The smallest useful `tako.toml` just needs a name and one environment with a route:
+If your project uses a supported framework, set `preset` and Tako fills in the build entrypoint, asset directories, and dev command for you. This is the recommended path:
 
 ```toml
 name = "my-app"
 runtime = "bun"
 runtime_version = "1.2.3"
+preset = "tanstack-start"
+
+[envs.production]
+route = "my-app.example.com"
+servers = ["la"]
+```
+
+| Framework      | `runtime`      | `preset`         |
+| -------------- | -------------- | ---------------- |
+| TanStack Start | `bun` / `node` | `tanstack-start` |
+| Next.js        | `bun` / `node` | `nextjs`         |
+| Vite (SPA/SSR) | `bun` / `node` | `vite`           |
+
+See [Presets](/docs/presets) for the full list and [Framework Guides](/docs/framework-guides) for required SDK plugin setup.
+
+If no preset matches your framework, omit `preset` and configure `main` and `[build]` yourself:
+
+```toml
+name = "my-app"
+runtime = "bun"
+runtime_version = "1.2.3"
+main = "dist/server/index.js"
+
+[build]
+install = "bun install"
+run = "bun run build"
 
 [envs.production]
 route = "my-app.example.com"

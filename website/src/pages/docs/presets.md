@@ -12,6 +12,18 @@ Presets are metadata-only defaults that tell Tako how to run a framework app. A 
 
 Every app uses a preset. If you don't name one, Tako falls back to the base runtime adapter for your selected runtime.
 
+## Which preset should I use?
+
+Pick a preset by matching your framework. If one matches, prefer it over wiring `main` and `[build]` by hand in `tako.toml`.
+
+| Framework      | `runtime`      | `preset`         |
+| -------------- | -------------- | ---------------- |
+| TanStack Start | `bun` / `node` | `tanstack-start` |
+| Next.js        | `bun` / `node` | `nextjs`         |
+| Other Vite app | `bun` / `node` | `vite`           |
+
+For frameworks not in this list, omit `preset` and set `main` yourself — see [Framework Guides](/docs/framework-guides) for the fetch-handler fallback.
+
 ## Base runtime adapters
 
 The `bun`, `node`, `deno`, and `go` adapters ship compiled into the CLI as runtime plugins (see `tako-runtime/src/plugins/`). They own runtime concerns — install commands, launch arguments, package-manager detection — and also supply a default entrypoint when no framework preset overrides it.
