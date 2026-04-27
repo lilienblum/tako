@@ -1289,7 +1289,7 @@ async fn sync_app_workflows_injects_release_env_and_app_data_dir_into_worker() {
     std::fs::write(
         &worker_entry,
         format!(
-            "printf '%s\\n' \"$TAKO_BUILD|$CUSTOM_ENV|$TAKO_DATA_DIR|$TAKO_APP_NAME\" > {}\n",
+            "cat <&3 >/dev/null\nprintf '%s\\n' \"$TAKO_BUILD|$CUSTOM_ENV|$TAKO_DATA_DIR|$TAKO_APP_NAME\" > {}\n",
             env_capture.display()
         ),
     )
