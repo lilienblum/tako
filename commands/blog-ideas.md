@@ -33,6 +33,17 @@ Aim for variety across these post types — don't return five of the same kind:
 - **Opinion / philosophy** — why Tako does something differently (no Docker, fetch handlers, SFTP, etc.)
 - **Vision** — where the platform is heading (channels, queues, workflows, image opt, edge)
 
+**Bias toward SEO reach.** At least **2–3 of the 5 ideas must target a high-intent search query** — the kind of phrase a developer types into Google when shopping for a tool. Strong patterns to look for:
+
+- `open source <Tool> alternative` — Cloudflare Workers, Heroku, Pusher, Ably, AWS Lambda, Vercel, Inngest, Temporal, Sidekiq, etc.
+- `self-hosted <Tool> alternative` — same target list, different intent
+- `<Tool> alternative for <year>` — works for declining-but-still-searched platforms (Heroku)
+- `how to deploy <Framework> to a VPS` — Next.js, SvelteKit, Remix, TanStack Start, Hono, Bun
+- `self-host <Capability>` — websockets, cron, queues, workflows, real-time, edge functions
+- `<Action> on deploy` — run database migrations, run release commands, etc.
+
+Before proposing a comparison, check `website/src/content/blog/` for an existing `tako-vs-*.md` covering the same competitor. If one exists, skip that competitor unless the new angle is materially different (e.g. SEO-shaped re-framing of a lumped post).
+
 Reject ideas that:
 
 - Duplicate an existing post's angle (different wording on the same thesis doesn't count as new)
@@ -41,16 +52,18 @@ Reject ideas that:
 
 **Title shape**: every proposed title should contain the concrete nouns a developer would search for (tool names, technologies, actions). Comparison and deep-dive posts are naturally search-shaped; announcement and opinion titles tend to drift clever — pull them back toward literal when the topic has an obvious search phrase. A good sanity check: would a developer plausibly type this title (or something close to it) into Google?
 
+Prefer literal over clever. "The open source Cloudflare Workers alternative" beats "Why we built our own runtime." "How to deploy Next.js to a VPS without Docker" beats "Next.js, your way." If the topic has an obvious search phrase, the title should contain it verbatim.
+
 ### Step 3 — Score and recommend
 
 Mark 1–2 ideas as **Recommended** based on:
 
+- **Search intent** — the title matches a real query developers type when shopping for a tool ("open source X alternative", "self-host X", "deploy X to a VPS"). This is the strongest signal.
 - **Timeliness** — shipped recently, no post yet, momentum to ride
 - **Coverage gap** — fills an obvious hole in the existing blog
-- **Reach** — comparison or opinion posts tend to attract more traffic than tutorials
 - **Effort/payoff** — easy to write well, hard to get wrong
 
-If two ideas tie, prefer the one closer to a recently shipped feature.
+If two ideas tie, prefer the SEO-shaped one. If they're both SEO-shaped, prefer the one closer to a recently shipped feature.
 
 ## Output format
 
