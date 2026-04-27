@@ -2,36 +2,8 @@
 title: "A Self-Hosted Pusher and Ably Alternative: Tako Channels"
 date: "2026-04-27T14:12"
 description: "Pusher charges per connection, Ably per minute. Tako Channels ships SSE, WebSockets, and replay into your own server — for whatever your VPS already costs."
-image:
+image: eb13f2a490c3
 ---
-
-<!-- IMAGE PROMPT (copy-paste this entire block into ChatGPT):
-
-Generate a wide illustration for a blog post hero image.
-
-Character: A small, simple octopus. Reference: https://tako.sh/assets/logo.svg
-The octopus must match the style of our logo — flat, minimal, no outlines, soft pastel coral pink body with simple dot eyes and a small curved mouth. Not 3D, not shiny, not glossy. Expressive and full of personality — eyes can squint, widen, or glance; the mouth can grin, gasp, or smirk; tentacles are always doing something. Stylized, not realistic, and not hyper-kawaii either.
-
-Scene: A late-night office split into two rooms by a thin wooden wall, late-1960s setting, viewed from a slightly tilted three-quarter angle. The two rooms read as "before" on the left and "after" on the right.
-
-LEFT ROOM — "before": one octopus at a giant wall-mounted telephone switchboard, frazzled and overwhelmed, eyes wide with a tiny flat sweat bead, mouth in a small "yikes" grimace. Six tentacles are mid-juggle through a tangled nest of patch cables — some plugging in, some yanking out, two cables are knotted together. The corkboard above the switchboard is overflowing with paper bills pinned crookedly: a large invoice clearly labeled "PUSHER — $499 / mo" and another labeled "ABLY — $399 / mo", with a few smaller crumpled "PAST DUE" slips fluttering down to the floor. A desk lamp is tilted at a stressed angle.
-
-RIGHT ROOM — "after": another octopus at a small tidy wooden desk with a single slim radio microphone in front of it. The mic base has a clean brass nameplate labeled "TAKO". A small plain server box sits on the floor next to the desk with a tag tied around it that reads "VPS — $5 / mo". This octopus has a relaxed half-smile, one tentacle propping up the side of its head, another tentacle casually adjusting the mic, the rest curled neatly. A potted plant on the desk and a steaming mug. The lamp is upright and warm.
-
-Between the two rooms, on the dividing wall, hangs a small hand-painted wooden sign that reads "before / after" with a curling arrow pointing left to right. Soft warm dusk light comes through tall windows behind both desks, with visible dust motes drifting through the beams.
-
-The two octopuses are doing visually OPPOSITE actions — one juggling chaos under a wall of bills, one sitting calmly with a single mic — so the frame reads "replace this with that," not "two friends working." Labels on the props (PUSHER, ABLY, TAKO, VPS — $5 / mo) are clearly legible.
-
-Style requirements:
-- Flat illustration with paper-like grain texture
-- Light, airy, pastel tones — not saturated, not glossy, not 3D
-- Color palette: coral pink (#E88783), mint teal (#9BC4B6), warm beige (#FFF9F4) background, dark purple (#2F2A44) accents
-- Hand-painted watercolor anime-studio interior feel — warm cel shading, expressive oversized eyes, dust motes in the light beams, lantern-glow accents on the labeled bills, chunky inked linework on the switchboard cables.
-- Playful, characterful, full of motion on the left side (fluttering paper, tangled cables in mid-air, dust puffs) and quietly composed on the right.
-- Landscape orientation, roughly 16:9. The image will be displayed in a centered, boxed frame at about 640×360 — no cropping, the original aspect ratio is preserved, so compose the whole frame to be presentable.
-
-Output: a single image in widescreen landscape format.
--->
 
 Most apps need real-time eventually. A chat pane, a live dashboard, a presence indicator on a doc. The default answer is to reach for [Pusher](https://pusher.com/channels/) or [Ably](https://ably.com/) — both excellent products that have been doing this since long before "real-time" was a checkbox on every framework's homepage. Sign up, add an SDK, ship.
 
