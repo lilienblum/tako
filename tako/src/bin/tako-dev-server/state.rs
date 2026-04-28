@@ -144,6 +144,7 @@ pub struct RuntimeApp {
     pub log_buffer: LogBuffer,
     pub pid: Option<u32>,
     pub client_pid: Option<u32>,
+    pub readiness_failure_hint: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

@@ -121,6 +121,7 @@ pub async fn run(
         public_url_port,
         cfg,
         cmd,
+        readiness_failure_hint,
         worker_command,
         dev_hosts,
         env,
@@ -273,6 +274,7 @@ pub async fn run(
         &reg_hosts,
         &cmd,
         &env_snapshot,
+        readiness_failure_hint.as_deref(),
         worker_command.as_deref(),
     )
     .await?;
@@ -527,6 +529,7 @@ pub async fn run(
                         &new_hosts,
                         &cmd,
                         &new_env,
+                        readiness_failure_hint.as_deref(),
                         worker_command.as_deref(),
                     )
                     .await

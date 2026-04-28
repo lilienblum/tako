@@ -139,6 +139,12 @@ Re-running `tako dev` re-applies the rules via the systemd oneshot service.
 
 **Fix:** the daemon polls `try_wait()` every 500ms. When the process exits, the route goes idle and the next HTTP request triggers a restart (wake-on-request). Idle shutdown is suppressed while in-flight requests exist, so mid-request exits are always an app-level issue. Check the `tako dev` log stream for runtime errors, missing modules, or unhandled exceptions.
 
+### Vite starts but Tako stays launching
+
+**Symptom:** Vite prints a local URL, but `tako dev` stays `launching` and then reports that Vite started without Tako readiness.
+
+**Fix:** add the `tako.sh/vite` plugin to `vite.config.ts`. Tako activates dev routes from the fd-4 readiness signal, not from Vite's stdout URL.
+
 ### HTTPS port 47831 conflict
 
 **Symptom:** `tako dev` exits immediately saying the HTTPS listen address is unavailable.

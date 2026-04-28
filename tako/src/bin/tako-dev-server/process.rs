@@ -10,6 +10,8 @@ use crate::route_pattern::{route_host_matches_request, split_route_pattern};
 use crate::state;
 use tokio::io::AsyncBufReadExt;
 
+const APP_READINESS_TIMEOUT: Duration = Duration::from_secs(30);
+
 pub(crate) async fn monitor_handoff_pid(
     state: Arc<Mutex<State>>,
     config_path: String,
@@ -68,6 +70,27 @@ pub(crate) fn kill_app_process(pid: u32) {
     unsafe {
         libc::kill(-(pid as i32), libc::SIGKILL);
         libc::kill(pid as i32, libc::SIGKILL);
+    }
+}
+
+async fn kill_and_reap_app_process(
+    child: &mut tokio::process::Child,
+    pid: Option<u32>,
+) -> Option<std::process::ExitStatus> {
+    if let Some(pid) = pid {
+        kill_app_process(pid);
+    }
+
+    match tokio::time::timeout(Duration::from_secs(2), child.wait()).await {
+        Ok(Ok(status)) => Some(status),
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "failed to reap app process after readiness timeout");
+            None
+        }
+        Err(_) => {
+            tracing::warn!("timed out reaping app process after readiness timeout");
+            None
+        }
     }
 }
 
@@ -136,6 +159,7 @@ pub(crate) async fn spawn_and_monitor_app(
         },
     );
 
+    let route_id = format!("reg:{}", config_path);
     let (mut child, readiness_fd) =
         spawn_app(&project_dir, &app_clone, internal_socket.as_deref()).await?;
     let pid = child.id().ok_or("failed to get child PID")?;
@@ -161,9 +185,21 @@ pub(crate) async fn spawn_and_monitor_app(
     );
 
     // Wait for the app to signal its bound port on fd 4, then activate the route.
-    // While inactive, wait_for_active() holds proxy requests for up to 30 s.
-    let route_id = format!("reg:{}", config_path);
-    activate_after_readiness(&state, config_path, &route_id, readiness_fd).await;
+    if let Err(e) =
+        activate_after_readiness(&state, config_path, &route_id, &app_clone, readiness_fd).await
+    {
+        kill_and_reap_app_process(&mut child, Some(pid)).await;
+        state::remove_pid_file(&project_dir, config_path);
+        {
+            let mut s = state.lock().unwrap();
+            if let Some(app) = s.apps.get_mut(config_path) {
+                app.pid = None;
+                app.is_idle = true;
+            }
+            s.routes.set_active(&route_id, false);
+        }
+        return Err(e.into());
+    }
 
     let state_for_monitor = state.clone();
     let config_for_monitor = config_path.to_string();
@@ -284,12 +320,13 @@ async fn activate_after_readiness(
     state: &Arc<Mutex<State>>,
     config_path: &str,
     route_id: &str,
+    app: &state::RuntimeApp,
     #[cfg(unix)] readiness_fd: Option<OwnedFd>,
     #[cfg(not(unix))] _readiness_fd: Option<()>,
-) {
+) -> Result<(), String> {
     #[cfg(unix)]
     if let Some(fd) = readiness_fd {
-        let port = tokio::time::timeout(std::time::Duration::from_secs(30), wait_for_readiness(fd))
+        let port = tokio::time::timeout(APP_READINESS_TIMEOUT, wait_for_readiness(fd))
             .await
             .ok()
             .flatten();
@@ -301,19 +338,23 @@ async fn activate_after_readiness(
                     app.upstream_port = port;
                 }
                 s.routes.activate_with_port(route_id, port);
-                return;
+                return Ok(());
             }
             None => {
-                tracing::warn!(
-                    config_path,
-                    "app did not signal a port on fd 4 (crashed or timeout); activating anyway"
-                );
+                return Err(readiness_failure_message(app));
             }
         }
     }
 
-    // Fallback: no readiness pipe or port not signaled — activate with existing port.
+    // Fallback for platforms without a readiness pipe: activate with existing port.
     state.lock().unwrap().routes.set_active(route_id, true);
+    Ok(())
+}
+
+fn readiness_failure_message(app: &state::RuntimeApp) -> String {
+    app.readiness_failure_hint
+        .clone()
+        .unwrap_or_else(|| "app did not signal readiness on fd 4 within 30s".to_string())
 }
 
 /// Merge user-supplied env with Tako's runtime contract.
@@ -507,6 +548,8 @@ pub(crate) async fn handle_wake_on_request(state: Arc<Mutex<State>>, host: Strin
         "waking idle app on request"
     );
 
+    let route_id = format!("reg:{}", config_path);
+
     match spawn_app(&app.project_dir, &app, internal_socket.as_deref()).await {
         Ok((mut child, readiness_fd)) => {
             let pid = child.id();
@@ -520,8 +563,32 @@ pub(crate) async fn handle_wake_on_request(state: Arc<Mutex<State>>, host: Strin
                 }
             }
 
-            let route_id = format!("reg:{}", config_path);
-            activate_after_readiness(&state, &config_path, &route_id, readiness_fd).await;
+            if let Err(e) =
+                activate_after_readiness(&state, &config_path, &route_id, &app, readiness_fd).await
+            {
+                kill_and_reap_app_process(&mut child, pid).await;
+                if pid.is_some() {
+                    state::remove_pid_file(&app.project_dir, &config_path);
+                }
+                {
+                    let mut s = state.lock().unwrap();
+                    if let Some(rt) = s.apps.get_mut(&config_path) {
+                        rt.is_idle = true;
+                        rt.pid = None;
+                    }
+                    s.routes.set_active(&route_id, false);
+                }
+                push_scoped_log(&app.log_buffer, "Error", "tako", &e);
+                broadcast_dev_event(
+                    &state,
+                    DevEvent::AppError {
+                        config_path: config_path.clone(),
+                        app_name: app.name.clone(),
+                        message: e,
+                    },
+                );
+                return;
+            }
 
             if let Some(pid) = pid {
                 state::write_pid_file(&app.project_dir, &config_path, pid);
@@ -602,6 +669,9 @@ pub(crate) fn kill_all_app_processes(state: &Arc<Mutex<State>>) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
 
 pub(crate) async fn stale_app_cleanup_loop(state: Arc<Mutex<State>>) {
     let mut ticker = tokio::time::interval(Duration::from_secs(60));

@@ -99,6 +99,8 @@ tako dev [--variant <VARIANT>]
 
 `tako dev` is a thin client. It ensures the persistent `tako-dev-server` daemon is running, then registers the selected config file so the daemon manages the process lifecycle, logs, and routing. Running `tako dev` again for the same config attaches to the existing session instead of starting a new one.
 
+The daemon marks an app running only after the process writes its bound loopback port to fd 4. Direct Vite dev commands need the `tako.sh/vite` plugin for this readiness signal; printed `localhost` URLs are diagnostic logs only.
+
 **Portless HTTPS URLs**
 
 Tako serves each registered app at `https://{app}.test/`.

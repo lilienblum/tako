@@ -112,6 +112,8 @@ Optional custom dev command. When set, it overrides both the preset's dev comman
 dev = ["vite", "dev"]
 ```
 
+Dev routes are activated only after the app writes its bound loopback port to fd 4. If this command directly invokes Vite, add the `tako.sh/vite` plugin so Vite supplies that readiness signal.
+
 ### `runtime`
 
 Optional runtime selector. Supported values:

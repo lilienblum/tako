@@ -371,6 +371,29 @@ pub(super) fn resolve_dev_run_command(
         .collect())
 }
 
+pub(super) fn readiness_failure_hint_for_dev_command(command: &[String]) -> Option<String> {
+    if !command_invokes_vite_dev(command) {
+        return None;
+    }
+
+    Some(
+        "Vite started without Tako readiness. Add the `tako.sh/vite` plugin to vite.config.ts so Tako can configure allowed hosts and receive the bound port on fd 4."
+            .to_string(),
+    )
+}
+
+fn command_invokes_vite_dev(command: &[String]) -> bool {
+    let has_vite = command.iter().any(|arg| {
+        Path::new(arg)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name == "vite")
+            .unwrap_or(arg == "vite")
+    });
+    let has_dev = command.len() == 1 || command.iter().any(|arg| arg == "dev" || arg == "--host");
+    has_vite && has_dev
+}
+
 pub(super) fn infer_preset_name_from_ref(preset_ref: &str) -> String {
     match parse_preset_reference(preset_ref) {
         Ok(PresetReference::OfficialAlias { name, .. }) => name,

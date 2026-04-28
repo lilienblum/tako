@@ -297,6 +297,30 @@ main = "src/index.ts"
 }
 
 #[test]
+fn readiness_failure_hint_for_dev_command_detects_vite_commands() {
+    for cmd in [
+        vec!["vite".to_string()],
+        vec!["vite".to_string(), "dev".to_string()],
+        vec![
+            "bun".to_string(),
+            "--bun".to_string(),
+            "./node_modules/.bin/vite".to_string(),
+            "dev".to_string(),
+        ],
+    ] {
+        let hint = readiness_failure_hint_for_dev_command(&cmd).unwrap();
+        assert!(hint.contains("tako.sh/vite"));
+    }
+}
+
+#[test]
+fn readiness_failure_hint_for_dev_command_ignores_package_scripts() {
+    let cmd = vec!["bun".to_string(), "run".to_string(), "dev".to_string()];
+
+    assert!(readiness_failure_hint_for_dev_command(&cmd).is_none());
+}
+
+#[test]
 fn resolve_dev_worker_command_returns_none_without_workflows_dir() {
     let temp = TempDir::new().unwrap();
     let cmd = resolve_dev_worker_command(temp.path(), BuildAdapter::Bun);

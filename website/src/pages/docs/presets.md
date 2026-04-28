@@ -50,7 +50,7 @@ assets = ["dist/client"]
 dev = ["vite", "dev"]
 ```
 
-Pairs with the `tako.sh/vite` plugin, which emits `dist/server/tako-entry.mjs` during `vite build` to wrap the SSR bundle with Tako's request handling. `dist/client` is merged into `public/` after build, and `tako dev` runs `vite dev`.
+Pairs with the `tako.sh/vite` plugin, which emits `dist/server/tako-entry.mjs` during `vite build` to wrap the SSR bundle with Tako's request handling. During `vite dev`, the plugin also provides fd-4 readiness for the dev daemon. `dist/client` is merged into `public/` after build, and `tako dev` runs `vite dev`.
 
 ### nextjs
 
@@ -69,7 +69,7 @@ Uses the `tako.sh/nextjs` adapter, which writes `.next/tako-entry.mjs` after `ne
 dev = ["vite", "dev"]
 ```
 
-Just a dev command. No `main`, no `assets` — use this when you want Tako to drive `vite dev` but take `main` from `package.json` or the base adapter.
+Just a dev command. No `main`, no `assets` — use this when you want Tako to drive `vite dev` but take `main` from `package.json` or the base adapter. Add the `tako.sh/vite` plugin so the direct Vite dev command can signal fd-4 readiness.
 
 ## Selecting a preset
 

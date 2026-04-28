@@ -495,6 +495,7 @@ pub async fn register_app(
     hosts: &[String],
     command: &[String],
     env: &std::collections::HashMap<String, String>,
+    readiness_failure_hint: Option<&str>,
     worker_command: Option<&[String]>,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let sock = socket_path()?;
@@ -512,6 +513,9 @@ pub async fn register_app(
     });
     if let Some(v) = variant {
         req["variant"] = serde_json::Value::String(v.to_string());
+    }
+    if let Some(hint) = readiness_failure_hint {
+        req["readiness_failure_hint"] = serde_json::Value::String(hint.to_string());
     }
     if let Some(wc) = worker_command {
         req["worker_command"] = serde_json::json!(wc);

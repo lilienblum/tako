@@ -73,6 +73,8 @@ Useful for running two configurations side by side without stepping on each othe
 2. The `dev` field on your resolved preset (the `tanstack-start` preset runs `vite dev`, the `nextjs` preset runs `next dev`).
 3. A runtime default: JavaScript runtimes go through the SDK's dev entrypoint, which wraps your default-exported fetch handler into a real HTTP server. Go runs `go run .`.
 
+The daemon activates a dev route only after the app writes its bound loopback port to fd 4. Direct Vite dev commands need the `tako.sh/vite` plugin for that readiness signal; Tako treats Vite's printed localhost URL as a log line, not as readiness.
+
 The SDK's dev entrypoint is the same code path as production, so what you see locally is the shape of what you'll see in prod.
 
 ### Config Watching

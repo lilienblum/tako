@@ -302,6 +302,7 @@ fn insert_test_app(state: &Arc<Mutex<State>>, project_dir: &str, name: &str) {
             log_buffer: state::LogBuffer::new(),
             pid: None,
             client_pid: None,
+            readiness_failure_hint: None,
         },
     );
     s.routes.set_routes(
@@ -833,6 +834,7 @@ fn kill_all_app_processes_sends_sigterm_to_tracked_pids() {
                 log_buffer: state::LogBuffer::new(),
                 pid: Some(pid),
                 client_pid: None,
+                readiness_failure_hint: None,
             },
         );
     }
@@ -1092,6 +1094,7 @@ async fn unregister_app_kills_running_process() {
                 log_buffer: state::LogBuffer::new(),
                 pid: Some(pid),
                 client_pid: None,
+                readiness_failure_hint: None,
             },
         );
     }
@@ -1177,6 +1180,7 @@ async fn wake_on_request_spawns_exactly_one_process() {
                 log_buffer: state::LogBuffer::new(),
                 pid: None,
                 client_pid: None,
+                readiness_failure_hint: None,
             },
         );
         s.routes.set_routes(
@@ -1288,6 +1292,7 @@ fn runtime_app_with_env(
         log_buffer: state::LogBuffer::new(),
         pid: None,
         client_pid: None,
+        readiness_failure_hint: None,
     }
 }
 

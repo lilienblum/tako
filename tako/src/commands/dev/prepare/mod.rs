@@ -27,6 +27,7 @@ pub(super) struct DevSession {
     pub public_url_port: u16,
     pub cfg: crate::config::TakoToml,
     pub cmd: Vec<String>,
+    pub readiness_failure_hint: Option<String>,
     /// Command to spawn the workflow worker subprocess on demand. `None`
     /// when the project ships no `workflows/` directory or the runtime
     /// doesn't support workflows.
@@ -186,6 +187,7 @@ pub(super) async fn prepare(
         &project_dir,
     )
     .map_err(|e| format!("Invalid dev start command: {}", e))?;
+    let readiness_failure_hint = readiness_failure_hint_for_dev_command(&cmd);
     let worker_command = resolve_dev_worker_command(&project_dir, runtime_adapter);
 
     // Start (or connect to) the dev server daemon.
@@ -287,6 +289,7 @@ pub(super) async fn prepare(
         public_url_port,
         cfg,
         cmd,
+        readiness_failure_hint,
         worker_command,
         dev_hosts,
         env,

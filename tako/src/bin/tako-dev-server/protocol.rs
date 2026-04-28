@@ -18,6 +18,8 @@ pub enum Request {
         env: std::collections::HashMap<String, String>,
         #[serde(default)]
         client_pid: Option<u32>,
+        #[serde(default)]
+        readiness_failure_hint: Option<String>,
         /// Command to spawn the workflow worker subprocess on demand (first
         /// `program`, rest are args). Present iff the project has a
         /// `workflows/` directory — the client resolves the runtime-specific
@@ -325,6 +327,7 @@ mod tests {
                 "development".to_string(),
             )]),
             client_pid: Some(1234),
+            readiness_failure_hint: Some("install the adapter".to_string()),
             worker_command: Some(vec![
                 "bun".to_string(),
                 "run".to_string(),

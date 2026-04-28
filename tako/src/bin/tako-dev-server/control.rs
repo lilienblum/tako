@@ -366,6 +366,7 @@ pub(crate) async fn handle_client(
                 command,
                 env,
                 client_pid,
+                readiness_failure_hint,
                 worker_command,
             } => {
                 let app_name = sanitize_app_name(&app_name);
@@ -437,6 +438,7 @@ pub(crate) async fn handle_client(
                             log_buffer,
                             pid: None,
                             client_pid,
+                            readiness_failure_hint,
                         },
                     );
 

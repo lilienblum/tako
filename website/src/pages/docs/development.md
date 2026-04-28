@@ -227,7 +227,7 @@ Runtime-specific overrides in presets (for example a different command under Bun
 
 ## Process monitoring
 
-`tako dev` polls `try_wait()` every 500ms to notice when the app process exits. On exit, the route goes idle and the daemon waits for the next request to restart the app. Before marking the app `running` on startup, Tako waits for TCP readiness so the first request does not race the bind.
+`tako dev` polls `try_wait()` every 500ms to notice when the app process exits. On exit, the route goes idle and the daemon waits for the next request to restart the app. Before marking the app `running`, Tako waits for the app to write its bound loopback port to fd 4. Direct Vite dev commands that never signal fd 4 report a hint to add the `tako.sh/vite` plugin; stdout URLs are not treated as readiness.
 
 ## Development environment variables
 
@@ -270,6 +270,7 @@ During `vite dev` the plugin:
 
 - Adds `.test` and `.tako.test` to `server.allowedHosts` so Vite accepts requests from Tako's hostnames.
 - When `PORT` is set (always true under Tako), binds Vite to `127.0.0.1:$PORT` with `strictPort: true` so the SDK and Vite agree on the port.
+- Signals fd-4 readiness so the dev daemon can activate the route once Vite is actually listening.
 
 During `vite build` the plugin emits `dist/server/tako-entry.mjs`, the wrapper used as the deploy entrypoint.
 
