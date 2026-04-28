@@ -1,0 +1,306 @@
+use super::schema::*;
+use super::validation::validate_top_level_keys;
+use crate::config::error::{ConfigError, Result};
+use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
+
+impl Config {
+    /// Load tako.toml from a directory
+    pub fn load_from_dir<P: AsRef<Path>>(dir: P) -> Result<Self> {
+        let path = dir.as_ref().join("tako.toml");
+        if !path.exists() {
+            return Err(ConfigError::Validation(format!(
+                "tako.toml not found at {}",
+                path.display()
+            )));
+        }
+
+        Self::load_from_file(&path)
+    }
+
+    /// Load tako.toml from a specific file
+    pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let content = fs::read_to_string(path.as_ref())
+            .map_err(|e| ConfigError::FileRead(path.as_ref().to_path_buf(), e))?;
+        let config = Self::parse(&content)?;
+        Ok(config)
+    }
+
+    /// Parse tako.toml content
+    pub fn parse(content: &str) -> Result<Self> {
+        if content.trim().is_empty() {
+            return Ok(Self::default());
+        }
+
+        // First parse into a raw Value so the current schema can be validated.
+        let raw: toml::Value = toml::from_str(content)?;
+        validate_top_level_keys(&raw)?;
+
+        // Parse top-level metadata
+        let name = parse_optional_string(&raw, "name")?;
+        let main = parse_optional_string(&raw, "main")?;
+        let runtime = parse_optional_string(&raw, "runtime")?;
+        let runtime_version = parse_optional_string(&raw, "runtime_version")?;
+        let package_manager = parse_optional_string(&raw, "package_manager")?;
+        let preset = parse_optional_string(&raw, "preset")?;
+        let dev = parse_string_array(&raw, "dev")?.unwrap_or_default();
+        let assets = parse_string_array(&raw, "assets")?.unwrap_or_default();
+        let release = parse_optional_string(&raw, "release")?;
+        let build = parse_build_config(&raw)?;
+        let build_stages = parse_build_stages(&raw)?;
+        let mut config = Config {
+            name,
+            main,
+            runtime,
+            runtime_version,
+            package_manager,
+            preset,
+            dev,
+            assets,
+            release,
+            build,
+            build_stages,
+            ..Config::default()
+        };
+
+        // Parse [vars] section (global) and [vars.*] sections (per-environment)
+        if let Some(vars) = raw.get("vars")
+            && let Some(table) = vars.as_table()
+        {
+            for (key, value) in table {
+                if let Some(s) = value.as_str() {
+                    // Direct string value - global var
+                    config.vars.insert(key.clone(), s.to_string());
+                } else if let Some(nested_table) = value.as_table() {
+                    // Nested table - per-environment vars [vars.production], etc.
+                    let mut env_vars = HashMap::new();
+                    for (var_name, var_value) in nested_table {
+                        if let Some(s) = var_value.as_str() {
+                            env_vars.insert(var_name.clone(), s.to_string());
+                        }
+                    }
+                    config.vars_per_env.insert(key.clone(), env_vars);
+                }
+            }
+        }
+
+        // Parse [envs.*] sections
+        if let Some(envs) = raw.get("envs")
+            && let Some(table) = envs.as_table()
+        {
+            for (env_name, env_value) in table {
+                let env_config: EnvConfig = toml::from_str(&toml::to_string(env_value)?)?;
+                config.envs.insert(env_name.clone(), env_config);
+            }
+        }
+
+        // Parse [servers.*] sections.
+        //
+        // The reserved key `workflows` under `[servers]` holds the default
+        // workflows config; all other keys are per-server overrides.
+        if let Some(servers) = raw.get("servers")
+            && let Some(table) = servers.as_table()
+        {
+            for (key, value) in table {
+                if key == "workflows" {
+                    let wf: WorkflowsConfig = toml::from_str(&toml::to_string(value)?)?;
+                    config.servers.workflows = Some(wf);
+                } else {
+                    let server_config: ServerConfig = toml::from_str(&toml::to_string(value)?)?;
+                    config.servers.per_server.insert(key.clone(), server_config);
+                }
+            }
+        }
+
+        config.validate()?;
+        Ok(config)
+    }
+}
+
+fn parse_build_config(raw: &toml::Value) -> Result<BuildConfig> {
+    let Some(value) = raw.get("build") else {
+        return Ok(BuildConfig::default());
+    };
+
+    let table = value
+        .as_table()
+        .ok_or_else(|| ConfigError::Validation("'build' must be a table ([build])".to_string()))?;
+    validate_build_keys(table)?;
+    let table_value = toml::Value::Table(table.clone());
+
+    let run = parse_optional_string(&table_value, "run")?;
+    let install = parse_optional_string(&table_value, "install")?;
+    let cwd = parse_optional_string(&table_value, "cwd")?;
+    let include = parse_string_array(&table_value, "include")?.unwrap_or_default();
+    let exclude = parse_string_array(&table_value, "exclude")?.unwrap_or_default();
+
+    Ok(BuildConfig {
+        run,
+        install,
+        cwd,
+        include,
+        exclude,
+    })
+}
+
+fn validate_build_keys(table: &toml::value::Table) -> Result<()> {
+    for key in table.keys() {
+        if !matches!(
+            key.as_str(),
+            "run" | "install" | "cwd" | "include" | "exclude"
+        ) {
+            return Err(ConfigError::Validation(format!(
+                "Unknown key 'build.{key}'"
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn parse_optional_string(raw: &toml::Value, key: &str) -> Result<Option<String>> {
+    let Some(value) = raw.get(key) else {
+        return Ok(None);
+    };
+    value
+        .as_str()
+        .map(|s| Some(s.to_string()))
+        .ok_or_else(|| ConfigError::Validation(format!("'{}' must be a string", key)))
+}
+
+fn parse_build_stages(raw: &toml::Value) -> Result<Vec<BuildStage>> {
+    let Some(value) = raw.get("build_stages") else {
+        return Ok(Vec::new());
+    };
+    let Some(stages) = value.as_array() else {
+        return Err(ConfigError::Validation(
+            "'build_stages' must be an array of tables ([[build_stages]])".to_string(),
+        ));
+    };
+
+    let mut parsed = Vec::with_capacity(stages.len());
+    for (index, stage_value) in stages.iter().enumerate() {
+        let Some(stage_table) = stage_value.as_table() else {
+            return Err(ConfigError::Validation(format!(
+                "'build_stages[{index}]' must be a table"
+            )));
+        };
+
+        for key in stage_table.keys() {
+            if !matches!(key.as_str(), "name" | "cwd" | "install" | "run" | "exclude") {
+                return Err(ConfigError::Validation(format!(
+                    "Unknown key 'build_stages[{index}].{key}'"
+                )));
+            }
+        }
+
+        let name = parse_build_stage_optional_string(stage_table, index, "name")?;
+        let cwd = parse_build_stage_optional_string(stage_table, index, "cwd")?;
+        let install = parse_build_stage_optional_string(stage_table, index, "install")?;
+        let run = parse_build_stage_required_string(stage_table, index, "run")?;
+        let exclude =
+            parse_build_stage_string_array(stage_table, index, "exclude")?.unwrap_or_default();
+
+        parsed.push(BuildStage {
+            name,
+            cwd,
+            install,
+            run,
+            exclude,
+        });
+    }
+
+    Ok(parsed)
+}
+
+fn parse_build_stage_optional_string(
+    stage_table: &toml::value::Table,
+    index: usize,
+    key: &str,
+) -> Result<Option<String>> {
+    let Some(value) = stage_table.get(key) else {
+        return Ok(None);
+    };
+    let Some(value) = value.as_str() else {
+        return Err(ConfigError::Validation(format!(
+            "'build_stages[{index}].{key}' must be a string"
+        )));
+    };
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(ConfigError::Validation(format!(
+            "'build_stages[{index}].{key}' cannot be empty"
+        )));
+    }
+    Ok(Some(trimmed.to_string()))
+}
+
+fn parse_build_stage_required_string(
+    stage_table: &toml::value::Table,
+    index: usize,
+    key: &str,
+) -> Result<String> {
+    let Some(value) = stage_table.get(key) else {
+        return Err(ConfigError::Validation(format!(
+            "'build_stages[{index}].{key}' is required"
+        )));
+    };
+    let Some(value) = value.as_str() else {
+        return Err(ConfigError::Validation(format!(
+            "'build_stages[{index}].{key}' must be a string"
+        )));
+    };
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(ConfigError::Validation(format!(
+            "'build_stages[{index}].{key}' cannot be empty"
+        )));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn parse_build_stage_string_array(
+    stage_table: &toml::value::Table,
+    index: usize,
+    key: &str,
+) -> Result<Option<Vec<String>>> {
+    let Some(value) = stage_table.get(key) else {
+        return Ok(None);
+    };
+    let Some(arr) = value.as_array() else {
+        return Err(ConfigError::Validation(format!(
+            "'build_stages[{index}].{key}' must be an array of strings"
+        )));
+    };
+    let mut out = Vec::with_capacity(arr.len());
+    for item in arr {
+        let Some(s) = item.as_str() else {
+            return Err(ConfigError::Validation(format!(
+                "'build_stages[{index}].{key}' must be an array of strings"
+            )));
+        };
+        out.push(s.to_string());
+    }
+    Ok(Some(out))
+}
+
+fn parse_string_array(raw: &toml::Value, key: &str) -> Result<Option<Vec<String>>> {
+    let Some(value) = raw.get(key) else {
+        return Ok(None);
+    };
+    let arr = value
+        .as_array()
+        .ok_or_else(|| ConfigError::Validation(format!("'{}' must be an array of strings", key)))?;
+    let mut out = Vec::with_capacity(arr.len());
+    for item in arr {
+        let Some(s) = item.as_str() else {
+            return Err(ConfigError::Validation(format!(
+                "'{}' must be an array of strings",
+                key
+            )));
+        };
+        out.push(s.to_string());
+    }
+    Ok(Some(out))
+}
