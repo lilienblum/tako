@@ -1,0 +1,275 @@
+use super::super::{AppConfig, Instance};
+use std::collections::HashMap;
+#[cfg(unix)]
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::path::Path;
+use tokio::process::Command;
+
+#[cfg(unix)]
+pub(super) fn resolve_app_user() -> Option<(u32, u32)> {
+    use std::ffi::CString;
+    // Unprivileged service users cannot switch to another uid/gid without extra capabilities.
+    // In that case, run app processes as the current service user.
+    if unsafe { libc::geteuid() } != 0 {
+        tracing::debug!(
+            "Running as unprivileged user; app processes will run as current service user"
+        );
+        return None;
+    }
+    let name = CString::new("tako-app").ok()?;
+    // SAFETY: getpwnam is thread-safe when not modifying the passwd db.
+    // The pointer is valid until the next call to getpwnam on this thread.
+    let pw = unsafe { libc::getpwnam(name.as_ptr()) };
+    if pw.is_null() {
+        tracing::debug!("tako-app user not found; app processes will run as current user");
+        return None;
+    }
+    let uid = unsafe { (*pw).pw_uid };
+    let gid = unsafe { (*pw).pw_gid };
+    tracing::info!(uid, gid, "Resolved tako-app user for app process isolation");
+    Some((uid, gid))
+}
+
+pub(super) fn build_instance_env(
+    config: &AppConfig,
+    _instance: &Instance,
+    internal_socket: Option<&Path>,
+) -> HashMap<String, String> {
+    let mut env = config.env_vars.clone();
+
+    // The Tako runtime contract (PORT=0, HOST loopback, TAKO_APP_NAME, and
+    // TAKO_INTERNAL_SOCKET when available) is defined in tako-core so dev and
+    // prod spawners can't drift. The internal auth token is NOT in env — it
+    // travels on fd 3 with secrets so it doesn't inherit into subprocesses.
+    let app_name = config.deployment_id();
+    tako_core::instance_env::TakoRuntimeEnv {
+        app_name: &app_name,
+        internal_socket,
+    }
+    .apply(&mut env);
+
+    env.entry("NODE_ENV".to_string())
+        .or_insert_with(|| "production".to_string());
+
+    env
+}
+
+/// Build the extra CLI args for the entrypoint (internal protocol, not env vars).
+pub(super) fn build_instance_args(instance: &Instance) -> Vec<String> {
+    vec!["--instance".to_string(), instance.id.clone()]
+}
+
+/// Resolve a binary name against the app's PATH env, falling back to the bare name.
+fn resolve_binary_from_env(binary: &str, env: &HashMap<String, String>) -> String {
+    // Already absolute — use as-is
+    if binary.starts_with('/') {
+        return binary.to_string();
+    }
+    // Search the app's PATH
+    if let Some(path_var) = env.get("PATH") {
+        for dir in path_var.split(':') {
+            let candidate = Path::new(dir).join(binary);
+            if candidate.is_file() {
+                return candidate.to_string_lossy().to_string();
+            }
+        }
+    }
+    // Fallback to bare name (Command::new will search process PATH)
+    binary.to_string()
+}
+
+/// Create the bootstrap pipe on fd 3: the child reads a JSON envelope
+/// `{"token": ..., "secrets": {...}}` and closes the fd.
+///
+/// The envelope travels on a pipe (not env/args) so the internal auth
+/// token doesn't inherit into subprocesses the app spawns. The pipe is
+/// always created, even with empty secrets — every Tako-managed process
+/// has a bootstrap fd. The envelope shape itself lives in
+/// `tako_core::bootstrap` so the workflows supervisor produces byte-for-byte
+/// the same payload. See `tako_spawn::create_payload_pipe` for the
+/// CLOEXEC/writer-thread semantics.
+#[cfg(unix)]
+pub(super) fn create_bootstrap_pipe(
+    token: &str,
+    secrets: &HashMap<String, String>,
+) -> std::io::Result<(OwnedFd, std::thread::JoinHandle<std::io::Result<()>>)> {
+    let bytes = tako_core::bootstrap::envelope_bytes(token, secrets);
+    tako_spawn::create_payload_pipe(bytes)
+}
+
+#[cfg(unix)]
+fn create_fd_pipe() -> std::io::Result<(OwnedFd, OwnedFd)> {
+    let mut fds = [0i32; 2];
+    if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+
+    Ok(unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) })
+}
+
+fn build_child_command(
+    config: &AppConfig,
+    env: &HashMap<String, String>,
+    extra_args: &[String],
+    app_user: Option<(u32, u32)>,
+    use_app_user: bool,
+    secrets_fd: Option<RawFd>,
+    readiness_fd: Option<RawFd>,
+) -> std::io::Result<Command> {
+    // Resolve the binary using the app's env PATH (not the server's PATH).
+    let binary = resolve_binary_from_env(&config.command[0], env);
+    let mut child_cmd = Command::new(&binary);
+    child_cmd.args(&config.command[1..]).args(extra_args);
+
+    #[cfg(unix)]
+    if use_app_user && let Some((uid, gid)) = app_user {
+        child_cmd.uid(uid);
+        child_cmd.gid(gid);
+    }
+
+    child_cmd
+        .current_dir(&config.path)
+        .envs(env)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+
+    // Pass internal runtime ABI pipes to the child.
+    #[cfg(unix)]
+    unsafe {
+        child_cmd.pre_exec(move || {
+            if let Some(fd) = secrets_fd {
+                if fd != 3 {
+                    if libc::dup2(fd, 3) == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    libc::close(fd);
+                }
+            } else {
+                libc::close(3);
+            }
+            if let Some(fd) = readiness_fd {
+                if fd != 4 {
+                    if libc::dup2(fd, 4) == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    libc::close(fd);
+                }
+            } else {
+                libc::close(4);
+            }
+            Ok(())
+        });
+    }
+
+    Ok(child_cmd)
+}
+
+pub(super) fn should_retry_spawn_without_app_user(
+    error: &std::io::Error,
+    app_user: Option<(u32, u32)>,
+) -> bool {
+    app_user.is_some() && error.kind() == std::io::ErrorKind::PermissionDenied
+}
+
+pub(super) fn spawn_child_process(
+    config: &AppConfig,
+    env: &HashMap<String, String>,
+    extra_args: &[String],
+    app_user: Option<(u32, u32)>,
+    token: &str,
+    secrets: &HashMap<String, String>,
+) -> std::io::Result<(tokio::process::Child, Option<OwnedFd>)> {
+    // Bootstrap pipe on fd 3: always present, carries `{token, secrets}`.
+    // The OwnedFd must stay alive until after spawn (fork copies the fd table).
+    // The writer thread owns the write end; it drains in parallel with the child
+    // so large envelopes don't deadlock the parent on pipe-buffer backpressure.
+    #[cfg(unix)]
+    let (bootstrap_pipe, bootstrap_writer) = create_bootstrap_pipe(token, secrets)?;
+    #[cfg(unix)]
+    let raw_fd = Some(bootstrap_pipe.as_raw_fd());
+    #[cfg(not(unix))]
+    let raw_fd = None;
+
+    #[cfg(unix)]
+    let (readiness_read_end, readiness_write_end) = create_fd_pipe()?;
+    #[cfg(unix)]
+    let readiness_raw_fd = Some(readiness_write_end.as_raw_fd());
+    #[cfg(not(unix))]
+    let readiness_raw_fd = None;
+
+    let mut child_cmd = build_child_command(
+        config,
+        env,
+        extra_args,
+        app_user,
+        true,
+        raw_fd,
+        readiness_raw_fd,
+    )?;
+    let spawn_result = match child_cmd.spawn() {
+        Ok(child) => Ok(child),
+        Err(error) if should_retry_spawn_without_app_user(&error, app_user) => {
+            tracing::warn!(
+                error = %error,
+                "Failed to switch to tako-app user; retrying spawn as service user"
+            );
+            // Pipe is still valid — fork either failed or the child exited before reading.
+            let mut fallback = build_child_command(
+                config,
+                env,
+                extra_args,
+                app_user,
+                false,
+                raw_fd,
+                readiness_raw_fd,
+            )?;
+            fallback.spawn()
+        }
+        Err(error) => Err(error),
+    };
+
+    match spawn_result {
+        Ok(child) => {
+            #[cfg(unix)]
+            {
+                drop(readiness_write_end);
+                // Join the bootstrap writer now that the child is draining fd 3.
+                // Surface any write error; otherwise the child would see a short
+                // payload and fail with a confusing parse error at startup.
+                join_bootstrap_writer(bootstrap_writer)?;
+                Ok((child, Some(readiness_read_end)))
+            }
+            #[cfg(not(unix))]
+            {
+                Ok((child, None))
+            }
+        }
+        Err(error) => {
+            // Spawn failed; the writer thread may still be blocked on a full
+            // pipe buffer waiting for a reader that will never come. Dropping
+            // the read end closes the read side, so the writer gets EPIPE and
+            // exits. We then join to reap the thread.
+            #[cfg(unix)]
+            {
+                drop(bootstrap_pipe);
+                drop(readiness_write_end);
+                drop(readiness_read_end);
+                let _ = bootstrap_writer.join();
+            }
+            Err(error)
+        }
+    }
+    // The parent-owned pipe ends drop here after spawn, leaving the child with
+    // only the ABI fds it needs across exec.
+}
+
+#[cfg(unix)]
+fn join_bootstrap_writer(
+    handle: std::thread::JoinHandle<std::io::Result<()>>,
+) -> std::io::Result<()> {
+    match handle.join() {
+        Ok(result) => result,
+        Err(_) => Err(std::io::Error::other("bootstrap writer thread panicked")),
+    }
+}
