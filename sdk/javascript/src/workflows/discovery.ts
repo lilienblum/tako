@@ -3,9 +3,9 @@
  *
  * Each `<name>.(ts|tsx|js|mjs|mts)` file becomes a workflow named `<name>`.
  * The default export must be either:
- *   - A `WorkflowDefinition` produced by `defineWorkflow(fn, config?)` — handler
- *     and config are read directly from the object.
- *   - A plain function — registered with empty config.
+ *   - A `WorkflowDefinition` produced by `defineWorkflow(name, opts)` —
+ *     handler and opts are read directly from the object.
+ *   - A plain function — registered with empty opts.
  *
  * Nested directories are not scanned in v1 — flat structure only.
  */
@@ -15,7 +15,7 @@ import { pathToFileURL } from "node:url";
 import { join, parse } from "node:path";
 import { dynImport } from "../tako/dyn-import";
 import { isWorkflowDefinition, isWorkflowExport } from "./define";
-import type { WorkflowConfig } from "./types";
+import type { WorkflowRuntimeOpts } from "./types";
 import type { WorkflowHandler } from "./worker";
 
 const VALID_EXTS = new Set([".ts", ".tsx", ".js", ".mjs", ".mts"]);
@@ -23,10 +23,23 @@ const VALID_EXTS = new Set([".ts", ".tsx", ".js", ".mjs", ".mts"]);
 export interface DiscoveredWorkflow {
   name: string;
   handler: WorkflowHandler;
-  config: WorkflowConfig;
+  opts: WorkflowRuntimeOpts;
 }
 
-export async function discoverWorkflows(dir: string): Promise<DiscoveredWorkflow[]> {
+export interface WorkflowDiscoveryOptions {
+  /**
+   * Only return workflows assigned to this worker group. Workflows without
+   * `opts.worker` belong to the default group. Omit to return all workflows.
+   */
+  worker?: string;
+}
+
+const DEFAULT_WORKER_GROUP = "default";
+
+export async function discoverWorkflows(
+  dir: string,
+  opts: WorkflowDiscoveryOptions = {},
+): Promise<DiscoveredWorkflow[]> {
   const exists = await dirExists(dir);
   if (!exists) return [];
 
@@ -48,19 +61,27 @@ export async function discoverWorkflows(dir: string): Promise<DiscoveredWorkflow
           `workflow file '${parsed.name}' exports defineWorkflow('${def.name}', ...); the name must match the file basename`,
         );
       }
-      found.push({ name: def.name, handler: def.handler, config: def.config });
+      pushIfWorkerMatches(found, { name: def.name, handler: def.handler, opts: def.opts }, opts);
     } else if (isWorkflowDefinition(defaultExport)) {
-      found.push({
-        name: defaultExport.name,
-        handler: defaultExport.handler,
-        config: defaultExport.config,
-      });
+      pushIfWorkerMatches(
+        found,
+        {
+          name: defaultExport.name,
+          handler: defaultExport.handler,
+          opts: defaultExport.opts,
+        },
+        opts,
+      );
     } else if (typeof defaultExport === "function") {
-      found.push({
-        name: parsed.name,
-        handler: defaultExport as WorkflowHandler,
-        config: {},
-      });
+      pushIfWorkerMatches(
+        found,
+        {
+          name: parsed.name,
+          handler: defaultExport as WorkflowHandler,
+          opts: {},
+        },
+        opts,
+      );
     } else {
       throw new Error(
         `workflow '${parsed.name}' (${entry}) must default-export a defineWorkflow() result or a plain function`,
@@ -68,6 +89,20 @@ export async function discoverWorkflows(dir: string): Promise<DiscoveredWorkflow
     }
   }
   return found;
+}
+
+function pushIfWorkerMatches(
+  found: DiscoveredWorkflow[],
+  workflow: DiscoveredWorkflow,
+  opts: WorkflowDiscoveryOptions,
+): void {
+  if (opts.worker === undefined || workflowWorkerGroup(workflow.opts) === opts.worker) {
+    found.push(workflow);
+  }
+}
+
+function workflowWorkerGroup(opts: WorkflowRuntimeOpts): string {
+  return opts.worker ?? DEFAULT_WORKER_GROUP;
 }
 
 async function dirExists(dir: string): Promise<boolean> {

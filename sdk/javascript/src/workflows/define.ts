@@ -1,6 +1,6 @@
 import { TakoError } from "../tako/error";
 import type { EnqueueOptions } from "./engine";
-import type { RunId, WorkflowConfig } from "./types";
+import type { RunId, WorkflowOpts, WorkflowRuntimeOpts } from "./types";
 import type { WorkflowHandler } from "./worker";
 
 export const WORKFLOW_SYMBOL = Symbol("workflow");
@@ -9,7 +9,7 @@ export interface WorkflowDefinition<P = unknown> {
   readonly type: typeof WORKFLOW_SYMBOL;
   readonly name: string;
   readonly handler: WorkflowHandler<P>;
-  readonly config: WorkflowConfig;
+  readonly opts: WorkflowRuntimeOpts;
 }
 
 /**
@@ -68,10 +68,13 @@ function requireRuntime(): WorkflowRuntime {
  *
  * export default defineWorkflow<{ userId: string }>(
  *   "send-email",
- *   async (payload, { step }) => {
- *     await step.run("send", () => sendEmail(payload.userId));
+ *   {
+ *     retries: 4,
+ *     schedule: "0 9 * * *",
+ *     handler: async (payload, { run }) => {
+ *       await run("send", () => sendEmail(payload.userId));
+ *     },
  *   },
- *   { retries: 4, schedule: "0 9 * * *" },
  * );
  *
  * // anywhere:
@@ -81,14 +84,14 @@ function requireRuntime(): WorkflowRuntime {
  */
 export function defineWorkflow<P = unknown>(
   name: string,
-  handler: WorkflowHandler<P>,
-  config: WorkflowConfig = {},
+  opts: WorkflowOpts<P>,
 ): WorkflowExport<P> {
+  const { handler, ...runtimeOpts } = opts;
   const definition: WorkflowDefinition<P> = {
     type: WORKFLOW_SYMBOL,
     name,
     handler,
-    config,
+    opts: runtimeOpts,
   };
   return {
     definition,
@@ -128,7 +131,9 @@ export function isWorkflowDefinition(value: unknown): value is WorkflowDefinitio
     typeof value === "object" &&
     value !== null &&
     "type" in value &&
+    "name" in value &&
     "handler" in value &&
+    "opts" in value &&
     (value as { type: unknown }).type === WORKFLOW_SYMBOL
   );
 }

@@ -1799,12 +1799,18 @@ queue service.
 ### Configuration (tako.toml)
 
 ```toml
-[servers.workflows]           # default applied to every server in the env
+[workflows]                   # base config inherited by every worker group
 workers = 1
 concurrency = 10
 
-[servers.lax.workflows]       # per-server override
+[workflows.email]             # named worker-group override
 workers = 2
+
+[servers.lax.workflows]       # base override on one server
+workers = 2
+
+[servers.lax.workflows.email] # named worker-group override on one server
+workers = 4
 ```
 
 Fields:
@@ -1812,13 +1818,15 @@ Fields:
 - **`workers`** — number of always-on worker processes. `0` = scale-to-zero: tako-server spawns the worker on the first enqueue or cron tick, and the worker exits after it has been idle (no claimed runs) long enough for the supervisor's idle window. Default `0`.
 - **`concurrency`** — max parallel runs per worker. Default `10`.
 
-Precedence: `[servers.<name>.workflows]` > `[servers.workflows]` > defaults (`workers = 0`, `concurrency = 10`). The name `workflows` under `[servers]` is reserved.
+Precedence for unnamed workflows: built-in defaults (`workers = 0`, `concurrency = 10`) < `[workflows]` < `[servers.<name>.workflows]`.
 
-If a JS app has a `workflows/` directory (or a Go app declares a worker binary) but no `[servers.*.workflows]` block anywhere, the app is implicitly scale-to-zero on every server in the env.
+Precedence for `worker: "email"`: built-in defaults < `[workflows]` < `[workflows.email]` < `[servers.<name>.workflows]` < `[servers.<name>.workflows.email]`. A top-level `workers = 5` under `[workflows]` is inherited by each worker group unless that group overrides it.
+
+If a JS app has a `workflows/` directory (or a Go app declares a worker binary) but no workflow config anywhere, the app is implicitly scale-to-zero on every server in the env.
 
 ### Authoring workflows
 
-**JS/TypeScript** — file-based discovery: drop a file into `workflows/<name>.ts` with a default export from `defineWorkflow<P>(name, handler, config?)`. The handler's second argument is the run context (`ctx`) — destructure `run`/`sleep`/`waitFor`/`bail`/`fail` off it as needed:
+**JS/TypeScript** — file-based discovery: drop a file into `workflows/<name>.ts` with a default export from `defineWorkflow<P>(name, opts)`. The `opts.handler` function's second argument is the run context (`ctx`) — destructure `run`/`sleep`/`waitFor`/`bail`/`fail` off it as needed:
 
 ```ts
 // workflows/send-email.ts
@@ -1826,17 +1834,19 @@ import { defineWorkflow } from "tako.sh";
 
 type SendEmailPayload = { userId: string };
 
-export default defineWorkflow<SendEmailPayload>(
-  "send-email",
-  async (payload, { run }) => {
+export default defineWorkflow<SendEmailPayload>("send-email", {
+  retries: 4,
+  schedule: "0 9 * * *",
+  handler: async (payload, { run }) => {
     const user = await run("fetch-user", () => db.users.find(payload.userId));
     await run("send", () => mailer.send(user.email));
   },
-  { retries: 4, schedule: "0 9 * * *" },
-); // 9am daily
+}); // 9am daily
 ```
 
 The `name` is required (it must be a string literal — codegen and the dedup/cron systems read it) and should match the filename for the file-based discovery scan.
+
+Set `worker: "name"` in the workflow opts to assign a workflow to a named worker group; workflows without `worker` belong to the `default` group. Worker processes launched with `TAKO_WORKFLOW_WORKER=<name>` load only workflows assigned to that group. Worker processes without `TAKO_WORKFLOW_WORKER` load all workflows for compatibility with the default single-worker deployment path.
 
 **Go** — explicit registration in a separate `cmd/worker/main.go` binary. Go's separate-binary design is intentional: a single-binary design would link CGO-heavy workflow deps (image libs, ML bindings) into the HTTP server binary.
 
@@ -1854,7 +1864,7 @@ await sendEmail.enqueue(payload, {
 });
 ```
 
-Each workflow module's default export is a typed handle: `.enqueue(payload, opts?)` is constrained to the payload type declared on `defineWorkflow<P>(name, handler)`. No typegen is needed for workflow enqueue typing — it flows from the module's own types.
+Each workflow module's default export is a typed handle: `.enqueue(payload, opts?)` is constrained to the payload type declared on `defineWorkflow<P>(name, opts)`. No typegen is needed for workflow enqueue typing — it flows from the module's own types.
 
 `uniqueKey` deduplicates: if an existing non-terminal run has the same key, enqueue is a no-op and returns the existing run's id. Cron ticks use this internally (key = `cron:<name>:<bucket_ms>`) so catching up doesn't double-enqueue.
 
@@ -1911,7 +1921,7 @@ Both work via sentinel exceptions caught by the worker. Useful for "this work is
 
 ### Retries / backoff (run level)
 
-- Failed handlers retry with exponential backoff (default base 1s, ±20% jitter, capped at 1h). Override via `defineWorkflow(name, fn, { retries, backoff })`. Default is 2 retries (3 total attempts).
+- Failed handlers retry with exponential backoff (default base 1s, ±20% jitter, capped at 1h). Override via `defineWorkflow(name, { handler, retries, backoff })`. Default is 2 retries (3 total attempts).
 - `attempts` bumps on every claim. When attempts reach the budget, the run moves to `dead`.
 - `defer_run` (sleep, waitFor) decrements attempts so parking doesn't consume retry budget.
 

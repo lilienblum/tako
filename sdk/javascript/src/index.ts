@@ -19,7 +19,7 @@
 
 export { defineChannel } from "./channels/define";
 export { defineWorkflow, signal } from "./workflows/define";
-export type { EnqueueOptions } from "./workflows";
+export type { EnqueueOptions, WorkflowOpts } from "./workflows";
 export { TakoError, type TakoErrorCode } from "./tako/error";
 
 /**

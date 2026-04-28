@@ -121,7 +121,11 @@ describe("discover", () => {
       join(dir, "send-email.mjs"),
       `
 import { defineWorkflow } from "${defineUrl}";
-export default defineWorkflow("send-email", async (payload, ctx) => payload.to, { retries: 4, schedule: "*/5 * * * *" });
+export default defineWorkflow("send-email", {
+  retries: 4,
+  schedule: "*/5 * * * *",
+  handler: async (payload, ctx) => payload.to,
+});
 `,
     );
     await writeFile(join(dir, "bare.mjs"), `export default function(payload) { return "ok"; }`);
@@ -131,6 +135,52 @@ export default defineWorkflow("send-email", async (payload, ctx) => payload.to, 
     const count = await engine.discover(dir);
     expect(count).toBe(2);
     expect(engine.registeredNames.sort()).toEqual(["bare", "send-email"]);
+  });
+
+  test("can discover only workflows assigned to a worker group", async () => {
+    const defineUrl = new URL("../../src/workflows/define.ts", import.meta.url).href;
+    await writeFile(
+      join(dir, "default-job.mjs"),
+      `
+import { defineWorkflow } from "${defineUrl}";
+export default defineWorkflow("default-job", { handler: async () => {} });
+`,
+    );
+    await writeFile(
+      join(dir, "media-job.mjs"),
+      `
+import { defineWorkflow } from "${defineUrl}";
+export default defineWorkflow("media-job", { worker: "media", handler: async () => {} });
+`,
+    );
+
+    const engine = new WorkflowEngine();
+    const count = await engine.discover(dir, { worker: "media" });
+    expect(count).toBe(1);
+    expect(engine.registeredNames).toEqual(["media-job"]);
+  });
+
+  test("default worker group discovers workflows without an explicit worker", async () => {
+    const defineUrl = new URL("../../src/workflows/define.ts", import.meta.url).href;
+    await writeFile(
+      join(dir, "default-job.mjs"),
+      `
+import { defineWorkflow } from "${defineUrl}";
+export default defineWorkflow("default-job", { handler: async () => {} });
+`,
+    );
+    await writeFile(
+      join(dir, "media-job.mjs"),
+      `
+import { defineWorkflow } from "${defineUrl}";
+export default defineWorkflow("media-job", { worker: "media", handler: async () => {} });
+`,
+    );
+
+    const engine = new WorkflowEngine();
+    const count = await engine.discover(dir, { worker: "default" });
+    expect(count).toBe(1);
+    expect(engine.registeredNames).toEqual(["default-job"]);
   });
 
   test("missing directory returns 0 and does not throw", async () => {

@@ -15,24 +15,25 @@ describe("WORKFLOW_SYMBOL", () => {
 describe("defineWorkflow", () => {
   test("returns an export with enqueue + definition", () => {
     const fn = async () => {};
-    const exp = defineWorkflow("my-job", fn, { schedule: "0 9 * * *" });
+    const exp = defineWorkflow("my-job", { handler: fn, schedule: "0 9 * * *" });
     expect(exp.definition.type).toBe(WORKFLOW_SYMBOL);
     expect(exp.definition.name).toBe("my-job");
     expect(exp.definition.handler).toBe(fn);
-    expect(exp.definition.config).toEqual({ schedule: "0 9 * * *" });
+    expect(exp.definition.opts).toEqual({ schedule: "0 9 * * *" });
     expect(typeof exp.enqueue).toBe("function");
   });
 
-  test("config defaults to empty object when not provided", () => {
+  test("opts only stores metadata outside the handler", () => {
     const fn = async () => {};
-    const exp = defineWorkflow("my-job", fn);
-    expect(exp.definition.config).toEqual({});
+    const exp = defineWorkflow("my-job", { handler: fn });
+    expect(exp.definition.handler).toBe(fn);
+    expect(exp.definition.opts).toEqual({});
   });
 });
 
 describe("isWorkflowExport", () => {
   test("returns true for a defineWorkflow result", () => {
-    const exp = defineWorkflow("j", async () => {});
+    const exp = defineWorkflow("j", { handler: async () => {} });
     expect(isWorkflowExport(exp)).toBe(true);
   });
 
@@ -47,7 +48,7 @@ describe("isWorkflowExport", () => {
 
 describe("isWorkflowDefinition", () => {
   test("returns true for the inner definition of a defineWorkflow result", () => {
-    const exp = defineWorkflow("j", async () => {});
+    const exp = defineWorkflow("j", { handler: async () => {} });
     expect(isWorkflowDefinition(exp.definition)).toBe(true);
   });
 
@@ -57,7 +58,16 @@ describe("isWorkflowDefinition", () => {
         type: Symbol("workflow"),
         name: "x",
         handler: () => {},
-        config: {},
+        opts: {},
+      }),
+    ).toBe(false);
+  });
+
+  test("returns false when required definition fields are missing", () => {
+    expect(
+      isWorkflowDefinition({
+        type: WORKFLOW_SYMBOL,
+        handler: () => {},
       }),
     ).toBe(false);
   });

@@ -44,76 +44,78 @@ function shouldStepFail(requestId: string, step: Step, attempt: number): boolean
   return (hash >>> 0) / 0xffffffff < FAIL_CHANCE;
 }
 
-export default defineWorkflow<OrderShipmentPayload>("order-shipment", async (payload, ctx) => {
-  const { requestId, base, item } = payload;
-  const channel = missionLog({ base });
+export default defineWorkflow<OrderShipmentPayload>("order-shipment", {
+  handler: async (payload, ctx) => {
+    const { requestId, base, item } = payload;
+    const channel = missionLog({ base });
 
-  async function emit(event: Omit<MissionLogEvent, "id" | "requestId" | "timestamp">) {
-    const full: MissionLogEvent = {
-      id: crypto.randomUUID(),
-      requestId,
-      timestamp: Date.now(),
-      ...event,
-    };
-    const request = applyMissionEventToRequest(full);
-    if (!request) {
-      return;
-    }
-    try {
-      const update: MissionChannelUpdate = { request, event: full };
-      await channel.publish({ type: "update", data: update });
-    } catch (err) {
-      workflowLogger.error("channel publish failed", { error: err, requestId, step: full.step });
-    }
-  }
-
-  await emit({
-    source: base,
-    level: "info",
-    message: `Request received: ${item}`,
-  });
-
-  for (const step of PIPELINE_STEPS) {
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      await emit({
-        source: base,
-        level: "info",
-        message: labelFor(step, "running"),
-        step,
-        status: "running",
-      });
-      await ctx.sleep(`${step}-wait-${attempt}`, STEP_TIMINGS[step]);
-
-      if (shouldStepFail(requestId, step, attempt)) {
-        await emit({
-          source: "System",
-          level: "warn",
-          message: `${labelFor(step, "failed")} (attempt ${attempt}/${MAX_ATTEMPTS})`,
-          step,
-          status: "failed",
-        });
-        await ctx.sleep(`${step}-retry-${attempt}`, 800);
-        continue;
+    async function emit(event: Omit<MissionLogEvent, "id" | "requestId" | "timestamp">) {
+      const full: MissionLogEvent = {
+        id: crypto.randomUUID(),
+        requestId,
+        timestamp: Date.now(),
+        ...event,
+      };
+      const request = applyMissionEventToRequest(full);
+      if (!request) {
+        return;
       }
-
-      await emit({
-        source: base,
-        level: "info",
-        message: labelFor(step, "done"),
-        step,
-        status: "done",
-      });
-      break;
+      try {
+        const update: MissionChannelUpdate = { request, event: full };
+        await channel.publish({ type: "update", data: update });
+      } catch (err) {
+        workflowLogger.error("channel publish failed", { error: err, requestId, step: full.step });
+      }
     }
-  }
 
-  await emit({
-    source: base,
-    level: "info",
-    message: `REQ-${shortId(requestId)} complete`,
-    step: "complete",
-    status: "done",
-  });
+    await emit({
+      source: base,
+      level: "info",
+      message: `Request received: ${item}`,
+    });
+
+    for (const step of PIPELINE_STEPS) {
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        await emit({
+          source: base,
+          level: "info",
+          message: labelFor(step, "running"),
+          step,
+          status: "running",
+        });
+        await ctx.sleep(`${step}-wait-${attempt}`, STEP_TIMINGS[step]);
+
+        if (shouldStepFail(requestId, step, attempt)) {
+          await emit({
+            source: "System",
+            level: "warn",
+            message: `${labelFor(step, "failed")} (attempt ${attempt}/${MAX_ATTEMPTS})`,
+            step,
+            status: "failed",
+          });
+          await ctx.sleep(`${step}-retry-${attempt}`, 800);
+          continue;
+        }
+
+        await emit({
+          source: base,
+          level: "info",
+          message: labelFor(step, "done"),
+          step,
+          status: "done",
+        });
+        break;
+      }
+    }
+
+    await emit({
+      source: base,
+      level: "info",
+      message: `REQ-${shortId(requestId)} complete`,
+      step: "complete",
+      status: "done",
+    });
+  },
 });
 
 function shortId(requestId: string): string {

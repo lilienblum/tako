@@ -23,7 +23,8 @@ export type {
   WorkflowDefinition,
   WorkflowHandler,
   WorkflowContext,
-  WorkflowConfig,
+  WorkflowOpts,
+  WorkflowRuntimeOpts,
 } from "./workflows";
 export type { WorkflowExport } from "./workflows/define";
 export type { StepRunOptions, StepWaitOptions } from "./workflows";

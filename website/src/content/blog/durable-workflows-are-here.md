@@ -19,16 +19,16 @@ The core idea is `ctx.run` — wrap a side effect, give it a name, and Tako pers
 // workflows/fulfill-order.ts
 import { defineWorkflow } from "tako.sh";
 
-export default defineWorkflow(
-  async (payload, { run }) => {
+export default defineWorkflow("fulfill-order", {
+  retries: 4,
+  handler: async (payload, { run }) => {
     const charge = await run("charge", () =>
       stripe.charges.create({ amount: payload.total, source: payload.token }),
     );
     const label = await run("ship", () => easypost.shipments.create({ to: payload.address }));
     await run("email", () => mailer.send(payload.email, { charge, tracking: label.id }));
   },
-  { retries: 4 },
-);
+});
 ```
 
 Each step is one row in a per-app SQLite queue at `{tako_data_dir}/apps/<app>/runs.db` with first-write-wins semantics. Retries are automatic — exponential backoff with jitter, capped at an hour, overridable per workflow (`retries: 4` means retry 4 times = 5 total attempts). The same contract every durable engine gives you: at-least-once, so make step bodies idempotent. See [the SPEC](/docs) for the full details.
@@ -43,11 +43,13 @@ Two primitives turn "workflow" into "long-running business process."
 
 ```ts
 // Worker — block the run until approval arrives
-export default defineWorkflow("approve-order", async (payload, { waitFor, bail }) => {
-  const decision = await waitFor(`approval:order-${payload.id}`, {
-    timeout: 7 * 24 * 3600 * 1000,
-  });
-  if (decision === null) bail("approval timed out");
+export default defineWorkflow("approve-order", {
+  handler: async (payload, { waitFor, bail }) => {
+    const decision = await waitFor(`approval:order-${payload.id}`, {
+      timeout: 7 * 24 * 3600 * 1000,
+    });
+    if (decision === null) bail("approval timed out");
+  },
 });
 
 // Elsewhere — an HTTP handler, webhook, or another workflow
@@ -62,12 +64,12 @@ Human approvals, webhook callbacks, multi-day onboarding nudges — all expresse
 Pass `schedule` to `defineWorkflow`. Tako runs a leader-elected ticker that enqueues on schedule, deduplicated so a brief outage doesn't double-fire:
 
 ```ts
-export default defineWorkflow(
-  async (payload, { run }) => {
+export default defineWorkflow("daily-job", {
+  schedule: "0 9 * * *",
+  handler: async (payload, { run }) => {
     // daily job body
   },
-  { schedule: "0 9 * * *" },
-); // 9am daily
+}); // 9am daily
 ```
 
 ## How it's wired
@@ -90,7 +92,7 @@ server -> db: "persist"
 The worker is a separate process so heavy deps — image libs, ML bindings — don't bloat your HTTP instances. Workers default to scale-to-zero: [same idea as your app](/blog/scale-to-zero-without-containers), the first enqueue or cron tick spins one up, an idle worker exits after five minutes. One knob in `tako.toml` pins them up:
 
 ```toml
-[servers.workflows]
+[workflows]
 workers = 1
 concurrency = 10
 ```

@@ -5,8 +5,10 @@ interface Payload {
   message: string;
 }
 
-export default defineWorkflow<Payload>("broadcast", async (payload, ctx) => {
-  await ctx.sleep("wait", 500);
+export default defineWorkflow<Payload>("broadcast", {
+  handler: async (payload, ctx) => {
+    await ctx.sleep("wait", 500);
 
-  await demo.publish({ type: "message", data: { message: payload.message } });
+    await demo.publish({ type: "message", data: { message: payload.message } });
+  },
 });

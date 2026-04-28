@@ -14,15 +14,15 @@
  * subset.
  */
 
-import { discoverWorkflows } from "./discovery";
+import { discoverWorkflows, type WorkflowDiscoveryOptions } from "./discovery";
 import { WorkflowsClient } from "./rpc-client";
-import type { WorkflowConfig } from "./types";
+import type { WorkflowRuntimeOpts } from "./types";
 import type { RunId } from "./types";
 import { Worker, type RegisteredWorkflow, type WorkflowHandler } from "./worker";
 
 interface Registration {
   handler: WorkflowHandler;
-  config: WorkflowConfig;
+  opts: WorkflowRuntimeOpts;
 }
 
 export interface EnqueueOptions {
@@ -77,23 +77,22 @@ export class WorkflowEngine {
     this.client = client;
   }
 
-  register(name: string, handler: WorkflowHandler, config: WorkflowConfig = {}): void {
+  register(name: string, handler: WorkflowHandler, opts: WorkflowRuntimeOpts = {}): void {
     if (this.registrations.has(name)) {
       throw new Error(`workflow '${name}' is already registered`);
     }
-    this.registrations.set(name, { handler, config });
+    this.registrations.set(name, { handler, opts });
   }
 
   /**
    * Scan `dir` for workflow files and register each one by filename (without
-   * extension). Re-exports: `default` is the handler; `schedule`,
-   * `retries`, `concurrency`, `timeoutMs` are optional named exports
-   * that flow into WorkflowConfig.
+   * extension). `opts.worker` can narrow discovery to workflows assigned to a
+   * specific worker group.
    */
-  async discover(dir: string): Promise<number> {
-    const found = await discoverWorkflows(dir);
+  async discover(dir: string, opts: WorkflowDiscoveryOptions = {}): Promise<number> {
+    const found = await discoverWorkflows(dir, opts);
     for (const entry of found) {
-      this.register(entry.name, entry.handler, entry.config);
+      this.register(entry.name, entry.handler, entry.opts);
     }
     return found.length;
   }
@@ -110,8 +109,8 @@ export class WorkflowEngine {
     const effectiveOpts: EnqueueOptions = { ...opts };
     if (effectiveOpts.retries === undefined) {
       const reg = this.registrations.get(name);
-      if (reg?.config.retries !== undefined) {
-        effectiveOpts.retries = reg.config.retries;
+      if (reg?.opts.retries !== undefined) {
+        effectiveOpts.retries = reg.opts.retries;
       }
     }
     const result = await client.enqueue(name, payload, effectiveOpts);
@@ -150,10 +149,10 @@ export class WorkflowEngine {
     const registry = new Map<string, RegisteredWorkflow>();
     for (const [name, reg] of this.registrations) {
       const entry: RegisteredWorkflow = { handler: reg.handler };
-      if (reg.config.retries !== undefined || reg.config.backoff !== undefined) {
+      if (reg.opts.retries !== undefined || reg.opts.backoff !== undefined) {
         entry.retry = {};
-        if (reg.config.retries !== undefined) entry.retry.maxAttempts = reg.config.retries + 1;
-        if (reg.config.backoff !== undefined) entry.retry.backoff = reg.config.backoff;
+        if (reg.opts.retries !== undefined) entry.retry.maxAttempts = reg.opts.retries + 1;
+        if (reg.opts.backoff !== undefined) entry.retry.backoff = reg.opts.backoff;
       }
       registry.set(name, entry);
     }
@@ -187,8 +186,8 @@ export class WorkflowEngine {
   collectSchedules(): Array<{ name: string; cron: string }> {
     const out: Array<{ name: string; cron: string }> = [];
     for (const [name, reg] of this.registrations) {
-      if (reg.config.schedule) {
-        out.push({ name, cron: reg.config.schedule });
+      if (reg.opts.schedule) {
+        out.push({ name, cron: reg.opts.schedule });
       }
     }
     return out;

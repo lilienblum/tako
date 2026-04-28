@@ -7,6 +7,8 @@
  *   step     — a memoized portion inside a run (via `ctx.run`)
  */
 
+import type { WorkflowHandler } from "./worker";
+
 export type RunId = string;
 
 export type RunStatus = "pending" | "running" | "succeeded" | "cancelled" | "dead";
@@ -55,7 +57,17 @@ export interface Run {
   uniqueKey: string | null;
 }
 
-export interface WorkflowConfig {
+export interface WorkflowOpts<P = unknown> {
+  /** Workflow body. The payload type flows into `.enqueue(payload)`. */
+  handler: WorkflowHandler<P>;
+  /**
+   * Worker group that should execute this workflow when a worker process is
+   * launched with a matching `TAKO_WORKFLOW_WORKER` value.
+   *
+   * Omit for the default worker group.
+   * @defaultValue "default"
+   */
+  worker?: string;
   /**
    * Number of retries after the first attempt.
    * @defaultValue 2
@@ -80,3 +92,5 @@ export interface WorkflowConfig {
    */
   schedule?: string;
 }
+
+export type WorkflowRuntimeOpts = Omit<WorkflowOpts, "handler">;

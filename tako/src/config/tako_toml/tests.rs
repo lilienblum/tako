@@ -10,26 +10,46 @@ fn test_parse_empty_file() {
     assert_eq!(config, Config::default());
 }
 
-// ==================== [servers.*] / Workflows Tests ====================
+// ==================== [workflows] / [servers.*.workflows] Tests ====================
 
 #[test]
-fn test_parse_servers_workflows_default_only() {
+fn test_parse_top_level_workflows_base() {
     let toml = r#"
 name = "app"
 
-[servers.workflows]
+[workflows]
 workers = 3
 concurrency = 20
 "#;
     let config = Config::parse(toml).unwrap();
-    let wf = config.servers.workflows.as_ref().unwrap();
-    assert_eq!(wf.workers, 3);
-    assert_eq!(wf.concurrency, 20);
+    assert_eq!(config.workflows.base.workers, Some(3));
+    assert_eq!(config.workflows.base.concurrency, Some(20));
+    assert!(config.workflows.groups.is_empty());
     assert!(config.servers.per_server.is_empty());
 }
 
 #[test]
-fn test_parse_servers_per_server_override() {
+fn test_parse_top_level_named_workflow_group() {
+    let toml = r#"
+[workflows]
+workers = 5
+concurrency = 10
+
+[workflows.email]
+workers = 2
+"#;
+    let config = Config::parse(toml).unwrap();
+    let email = config.workflows.groups.get("email").unwrap();
+    assert_eq!(email.workers, Some(2));
+    assert_eq!(email.concurrency, None);
+
+    let effective = config.workflows_for_server_worker("lax", Some("email"));
+    assert_eq!(effective.workers, 2);
+    assert_eq!(effective.concurrency, 10);
+}
+
+#[test]
+fn test_parse_server_workflows_override() {
     let toml = r#"
 name = "app"
 
@@ -37,34 +57,32 @@ name = "app"
 workers = 2
 "#;
     let config = Config::parse(toml).unwrap();
-    assert!(config.servers.workflows.is_none());
     let lax = config.servers.per_server.get("lax").unwrap();
     let wf = lax.workflows.as_ref().unwrap();
-    assert_eq!(wf.workers, 2);
-    assert_eq!(wf.concurrency, 10); // default
+    assert_eq!(wf.base.workers, Some(2));
+    assert_eq!(wf.base.concurrency, None);
 }
 
 #[test]
-fn test_workflows_for_server_prefers_per_server_override() {
+fn test_workflows_for_server_inherits_top_level_then_server_override() {
     let toml = r#"
-[servers.workflows]
+[workflows]
 workers = 1
 concurrency = 5
 
 [servers.lax.workflows]
 workers = 4
-concurrency = 15
 "#;
     let config = Config::parse(toml).unwrap();
     let lax = config.workflows_for_server("lax");
     assert_eq!(lax.workers, 4);
-    assert_eq!(lax.concurrency, 15);
+    assert_eq!(lax.concurrency, 5);
 }
 
 #[test]
-fn test_workflows_for_server_falls_back_to_default() {
+fn test_workflows_for_server_falls_back_to_top_level() {
     let toml = r#"
-[servers.workflows]
+[workflows]
 workers = 1
 concurrency = 5
 
@@ -86,34 +104,42 @@ fn test_workflows_for_server_falls_back_to_zero_config() {
 }
 
 #[test]
-fn test_workflows_defaults_when_section_is_empty() {
+fn test_workflows_for_named_worker_inherits_all_layers() {
     let toml = r#"
-[servers.workflows]
+[workflows]
+workers = 5
+concurrency = 10
+
+[workflows.email]
+workers = 2
+
+[servers.lax.workflows]
+concurrency = 20
+
+[servers.lax.workflows.email]
+workers = 4
 "#;
     let config = Config::parse(toml).unwrap();
-    let wf = config.servers.workflows.as_ref().unwrap();
-    assert_eq!(wf.workers, 0);
-    assert_eq!(wf.concurrency, 10);
+    let email = config.workflows_for_server_worker("lax", Some("email"));
+    assert_eq!(email.workers, 4);
+    assert_eq!(email.concurrency, 20);
+
+    let default = config.workflows_for_server("lax");
+    assert_eq!(default.workers, 5);
+    assert_eq!(default.concurrency, 20);
 }
 
 #[test]
-fn test_parse_multiple_server_overrides() {
+fn test_empty_workflows_sections_use_built_in_defaults() {
     let toml = r#"
-[servers.workflows]
-workers = 1
+[workflows]
 
 [servers.lax.workflows]
-workers = 2
-
-[servers.nyc.workflows]
-workers = 3
-concurrency = 50
 "#;
     let config = Config::parse(toml).unwrap();
-    assert_eq!(config.workflows_for_server("lax").workers, 2);
-    assert_eq!(config.workflows_for_server("nyc").workers, 3);
-    assert_eq!(config.workflows_for_server("nyc").concurrency, 50);
-    assert_eq!(config.workflows_for_server("unknown").workers, 1);
+    let wf = config.workflows_for_server("lax");
+    assert_eq!(wf.workers, 0);
+    assert_eq!(wf.concurrency, 10);
 }
 
 #[test]
@@ -129,12 +155,32 @@ unknown_field = 1
 #[test]
 fn test_parse_workflows_with_unknown_field_errors() {
     let toml = r#"
-[servers.workflows]
+[workflows]
 workers = 1
 bogus = true
 "#;
     let err = Config::parse(toml).unwrap_err();
     assert!(err.to_string().to_lowercase().contains("bogus"));
+}
+
+#[test]
+fn test_parse_workflows_rejects_invalid_worker_group_name() {
+    let toml = r#"
+[workflows.Email]
+workers = 1
+"#;
+    let err = Config::parse(toml).unwrap_err();
+    assert!(err.to_string().contains("Workflow worker group"));
+}
+
+#[test]
+fn test_servers_workflows_reserved_default_is_rejected() {
+    let toml = r#"
+[servers.workflows]
+workers = 1
+"#;
+    let err = Config::parse(toml).unwrap_err();
+    assert!(err.to_string().contains("[workflows]"));
 }
 
 #[test]

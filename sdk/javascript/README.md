@@ -13,7 +13,7 @@ Package name: `tako.sh`
 - Built-in internal status endpoint (`GET /status` on `Host: tako.internal`)
 - Built-in internal channel auth + dispatch endpoints on `Host: tako.internal`
 
-The `tako.sh` package's named exports are the definition helpers (`defineChannel`, `defineWorkflow`), the workflow `signal` function, `TakoError`, and types (`InferWorkflowPayload`, `TakoErrorCode`, `EnqueueOptions`). There is no `Tako` global — channels and workflows are plain ES modules that you import where you use them.
+The `tako.sh` package's named exports are the definition helpers (`defineChannel`, `defineWorkflow`), the workflow `signal` function, `TakoError`, and types (`InferWorkflowPayload`, `TakoErrorCode`, `EnqueueOptions`, `WorkflowOpts`). There is no `Tako` global — channels and workflows are plain ES modules that you import where you use them.
 
 ## Install
 
@@ -82,14 +82,16 @@ Declare one workflow per file in `workflows/<name>.ts`. The default export expos
 // workflows/send-email.ts
 import { defineWorkflow } from "tako.sh";
 
-export default defineWorkflow<{ userId: string }>(
-  "send-email",
-  async (payload, ctx) => {
+export default defineWorkflow<{ userId: string }>("send-email", {
+  retries: 4,
+  schedule: "0 9 * * *",
+  handler: async (payload, ctx) => {
     await ctx.run("send", () => sendEmail(payload.userId));
   },
-  { retries: 4, schedule: "0 9 * * *" },
-);
+});
 ```
+
+Set `worker: "name"` in the workflow opts to assign a workflow to a named worker group; omitted workflows belong to the `default` group.
 
 Enqueue from anywhere — route handlers, other workflows, scripts:
 

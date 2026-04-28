@@ -19,9 +19,9 @@ Imagine an order-fulfillment workflow. Charge the card, run a fraud check, **wai
 // workflows/fulfill-order.ts
 import { defineWorkflow } from "tako.sh";
 
-export default defineWorkflow<{ orderId: string }>(
-  "fulfill-order",
-  async (payload, ctx) => {
+export default defineWorkflow<{ orderId: string }>("fulfill-order", {
+  retries: 4,
+  handler: async (payload, ctx) => {
     const order = await ctx.run("load-order", () => db.orders.find(payload.orderId));
 
     await ctx.run("charge", () =>
@@ -41,8 +41,7 @@ export default defineWorkflow<{ orderId: string }>(
     await ctx.run("ship", () => easypost.shipments.create({ to: order.address }));
     await ctx.run("notify", () => mailer.send(order.email, { orderId: order.id }));
   },
-  { retries: 4 },
-);
+});
 ```
 
 The interesting line is `ctx.waitFor`. When the run hits it, the worker doesn't sit and spin — it serializes the run state, marks the row `pending` in the per-app SQLite queue, inserts an `event_waiters` row keyed by the event name, and exits the handler. If nothing else is in flight, the worker subprocess itself shuts down. Zero CPU, zero memory, zero open connections — just a row in a file at `{tako_data_dir}/apps/<app>/runs.db`.

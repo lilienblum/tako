@@ -10,6 +10,7 @@
  * Env vars (set by tako-server when it spawns the worker):
  *   TAKO_INTERNAL_SOCKET       — path to the shared Tako internal unix socket
  *   TAKO_APP_NAME              — app name the worker belongs to
+ *   TAKO_WORKFLOW_WORKER       — optional worker group to load
  *   TAKO_WORKER_CONCURRENCY    — max parallel tasks per worker (default 10)
  *   TAKO_WORKER_IDLE_TIMEOUT_MS — scale-to-zero idle timeout; 0 = never
  *
@@ -40,6 +41,7 @@ export interface WorkerBootstrapResult {
 }
 
 const WORKFLOWS_DIRNAME = "workflows";
+const WORKFLOW_WORKER_ENV = "TAKO_WORKFLOW_WORKER";
 
 export async function bootstrapWorker(
   opts: WorkerBootstrapOptions = {},
@@ -60,7 +62,10 @@ export async function bootstrapWorker(
 
   const concurrency = parseIntEnv("TAKO_WORKER_CONCURRENCY", 500);
   const idleTimeoutMs = parseIntEnv("TAKO_WORKER_IDLE_TIMEOUT_MS", 0);
-  const workerId = `worker-${process.pid}`;
+  const workflowWorker = process.env[WORKFLOW_WORKER_ENV]?.trim() || undefined;
+  const workerId = workflowWorker
+    ? `worker-${workflowWorker}-${process.pid}`
+    : `worker-${process.pid}`;
 
   workflowsEngine.configure({ client, workerId });
   setWorkflowRuntime({
@@ -69,7 +74,10 @@ export async function bootstrapWorker(
   });
 
   const workflowsDir = join(appDir, WORKFLOWS_DIRNAME);
-  const count = await workflowsEngine.discover(workflowsDir);
+  const count = await workflowsEngine.discover(
+    workflowsDir,
+    workflowWorker === undefined ? {} : { worker: workflowWorker },
+  );
   if (count === 0) {
     return { started: false, reason: "no workflows discovered", workflowCount: 0 };
   }

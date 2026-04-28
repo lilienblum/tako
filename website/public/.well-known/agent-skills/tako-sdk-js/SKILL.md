@@ -344,26 +344,24 @@ Durable background tasks with retries, schedules, and step checkpointing.
 
 ### Authoring workflows
 
-Drop a file in `workflows/<name>.ts` with a default export. The first arg is the workflow name (conventionally the kebab-case file basename), the second is the handler, the third is optional config:
+Drop a file in `workflows/<name>.ts` with a default export. The first arg is the workflow name (conventionally the kebab-case file basename), the second is a `WorkflowOpts` object with `handler` plus optional runtime settings:
 
 ```typescript
 // workflows/send-email.ts
 import { defineWorkflow } from "tako.sh";
 
-export default defineWorkflow<{ userId: string; to: string }>(
-  "send-email",
-  async (payload, ctx) => {
+export default defineWorkflow<{ userId: string; to: string }>("send-email", {
+  retries: 3, // retries after first attempt (default 2)
+  schedule: "0 9 * * *", // cron: daily at 9am (5-field)
+  worker: "email", // optional worker group; omitted means "default"
+  concurrency: 10, // max parallel runs per worker (default 10)
+  timeoutMs: 30_000, // handler timeout (default Infinity)
+  backoff: { base: 1_000, max: 3_600_000 }, // exponential backoff
+  handler: async (payload, ctx) => {
     const user = await ctx.run("fetch-user", () => db.users.find(payload.userId));
     await ctx.run("send", () => sendEmail(user, payload.to));
   },
-  {
-    retries: 3, // retries after first attempt (default 2)
-    schedule: "0 9 * * *", // cron: daily at 9am (5-field)
-    concurrency: 10, // max parallel runs per worker (default 10)
-    timeoutMs: 30_000, // handler timeout (default Infinity)
-    backoff: { base: 1_000, max: 3_600_000 }, // exponential backoff
-  },
-);
+});
 ```
 
 ### Enqueuing
@@ -423,17 +421,23 @@ await signal("approval:order-abc", { approved: true });
 ### tako.toml configuration
 
 ```toml
-[servers.workflows]        # default for all servers in the env
+[workflows]                # base config inherited by every worker group
 workers = 1                # 0 = scale-to-zero (default)
 concurrency = 10
 
-[servers.lax.workflows]    # per-server override
+[workflows.email]          # named worker-group override
 workers = 2
+
+[servers.lax.workflows]    # base override on one server
+concurrency = 20
+
+[servers.lax.workflows.email]
+workers = 4
 ```
 
 - `workers = 0` — scale-to-zero: worker spawned on first enqueue/cron tick, exits after 300s idle.
-- Precedence: `[servers.<name>.workflows]` > `[servers.workflows]` > defaults.
-- If a `workflows/` directory exists but no `[servers.*.workflows]` block, the app is implicitly scale-to-zero on every server.
+- Precedence for `worker: "email"`: `[servers.<name>.workflows.email]` > `[servers.<name>.workflows]` > `[workflows.email]` > `[workflows]` > defaults.
+- If a `workflows/` directory exists but no workflow config exists, the app is implicitly scale-to-zero on every server.
 
 ## Common Mistakes
 

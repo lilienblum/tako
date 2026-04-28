@@ -389,20 +389,26 @@ idle_timeout = 300
 
 ---
 
-## `[servers]` and Workflows
+## `[workflows]` and Server Overrides
 
-Per-server settings for this app. Right now this section configures workflow workers.
+Workflow worker settings for this app, with optional per-server overrides.
 
 ```toml
-[servers.workflows]
+[workflows]
 workers = 1
 concurrency = 10
 
+[workflows.email]
+workers = 2
+
 [servers.la.workflows]
 workers = 2
+
+[servers.la.workflows.email]
+workers = 4
 ```
 
-**Fields under `[servers.workflows]` and `[servers.<name>.workflows]`:**
+**Fields under `[workflows]`, `[workflows.<worker>]`, `[servers.<name>.workflows]`, and `[servers.<name>.workflows.<worker>]`:**
 
 | Field         | Default | Description                                                                                                                                             |
 | ------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -411,13 +417,23 @@ workers = 2
 
 **Precedence:**
 
+For unnamed workflows:
+
 1. `[servers.<name>.workflows]` — per-server override
-2. `[servers.workflows]` — default for every server in the env
+2. `[workflows]` — app-wide base
 3. Built-in defaults (`workers = 0`, `concurrency = 10`)
 
-`workflows` is a reserved key under `[servers]` — you cannot name a server `workflows`.
+For `worker: "email"`:
 
-If your app has a `workflows/` directory (JS) or declares a worker binary (Go) but no `[servers.*.workflows]` block, the app is implicitly scale-to-zero on every server in the environment.
+1. `[servers.<name>.workflows.email]` — per-server worker-group override
+2. `[servers.<name>.workflows]` — per-server base override
+3. `[workflows.email]` — app-wide worker-group override
+4. `[workflows]` — app-wide base
+5. Built-in defaults (`workers = 0`, `concurrency = 10`)
+
+Top-level `[workflows] workers = 5` is inherited by each worker group unless that group overrides it.
+
+If your app has a `workflows/` directory (JS) or declares a worker binary (Go) but no workflow config, the app is implicitly scale-to-zero on every server in the environment.
 
 ---
 
@@ -564,14 +580,22 @@ routes = [
 servers = ["staging"]
 idle_timeout = 120
 
-# Default workflow config for every server in this app.
-[servers.workflows]
+# Base workflow config for every server in this app.
+[workflows]
 workers = 1
 concurrency = 10
 
-# Per-server override — the `la` server runs two always-on workers.
+# The `email` worker group gets its own always-on pool.
+[workflows.email]
+workers = 2
+
+# Per-server override — the `la` server changes the base workflow pool.
 [servers.la.workflows]
 workers = 2
+
+# Per-server worker-group override — `email` gets more workers on `la`.
+[servers.la.workflows.email]
+workers = 4
 ```
 
 ---

@@ -5,20 +5,46 @@ use std::path::Path;
 const RESERVED_DERIVED_ENV_VARS: &[&str] = &["ENV"];
 
 impl Config {
-    /// Return the effective workflows config for a given server name.
+    /// Return the effective workflows config for unnamed workflows on a
+    /// given server.
     ///
-    /// Precedence: `[servers.<name>.workflows]` > `[servers.workflows]` > defaults
-    /// (`workers = 0`, `concurrency = 10`).
-    pub fn workflows_for_server(&self, name: &str) -> WorkflowsConfig {
-        if let Some(server) = self.servers.per_server.get(name)
-            && let Some(wf) = &server.workflows
+    /// Precedence: `[servers.<name>.workflows]` > `[workflows]` > built-in
+    /// defaults (`workers = 0`, `concurrency = 10`).
+    pub fn workflows_for_server(&self, name: &str) -> EffectiveWorkflowsConfig {
+        self.workflows_for_server_worker(name, None)
+    }
+
+    /// Return the effective workflows config for an optional named worker
+    /// group on a given server.
+    ///
+    /// Precedence for `worker = "email"`:
+    /// built-in defaults < `[workflows]` < `[workflows.email]` <
+    /// `[servers.<name>.workflows]` < `[servers.<name>.workflows.email]`.
+    pub fn workflows_for_server_worker(
+        &self,
+        server_name: &str,
+        worker: Option<&str>,
+    ) -> EffectiveWorkflowsConfig {
+        let mut effective = EffectiveWorkflowsConfig::default();
+        self.workflows.base.apply_to(&mut effective);
+        if let Some(worker) = worker
+            && let Some(group) = self.workflows.groups.get(worker)
         {
-            return wf.clone();
+            group.apply_to(&mut effective);
         }
-        if let Some(wf) = &self.servers.workflows {
-            return wf.clone();
+
+        if let Some(server) = self.servers.per_server.get(server_name)
+            && let Some(workflows) = &server.workflows
+        {
+            workflows.base.apply_to(&mut effective);
+            if let Some(worker) = worker
+                && let Some(group) = workflows.groups.get(worker)
+            {
+                group.apply_to(&mut effective);
+            }
         }
-        WorkflowsConfig::default()
+
+        effective
     }
 
     /// Get servers for a specific environment

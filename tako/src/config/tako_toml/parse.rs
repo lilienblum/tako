@@ -49,6 +49,7 @@ impl Config {
         let release = parse_optional_string(&raw, "release")?;
         let build = parse_build_config(&raw)?;
         let build_stages = parse_build_stages(&raw)?;
+        let workflows = parse_workflows_config(&raw, "workflows")?.unwrap_or_default();
         let mut config = Config {
             name,
             main,
@@ -61,6 +62,7 @@ impl Config {
             release,
             build,
             build_stages,
+            workflows,
             ..Config::default()
         };
 
@@ -96,26 +98,102 @@ impl Config {
         }
 
         // Parse [servers.*] sections.
-        //
-        // The reserved key `workflows` under `[servers]` holds the default
-        // workflows config; all other keys are per-server overrides.
         if let Some(servers) = raw.get("servers")
             && let Some(table) = servers.as_table()
         {
             for (key, value) in table {
                 if key == "workflows" {
-                    let wf: WorkflowsConfig = toml::from_str(&toml::to_string(value)?)?;
-                    config.servers.workflows = Some(wf);
-                } else {
-                    let server_config: ServerConfig = toml::from_str(&toml::to_string(value)?)?;
-                    config.servers.per_server.insert(key.clone(), server_config);
+                    return Err(ConfigError::Validation(
+                        "[servers.workflows] is no longer valid. Use top-level [workflows] for app-wide workflow settings, or [servers.<name>.workflows] for a server override."
+                            .to_string(),
+                    ));
                 }
+                let server_config = parse_server_config(value)?;
+                config.servers.per_server.insert(key.clone(), server_config);
             }
         }
 
         config.validate()?;
         Ok(config)
     }
+}
+
+fn parse_server_config(value: &toml::Value) -> Result<ServerConfig> {
+    let table = value
+        .as_table()
+        .ok_or_else(|| ConfigError::Validation("[servers.<name>] must be a table".to_string()))?;
+    for key in table.keys() {
+        if key != "workflows" {
+            return Err(ConfigError::Validation(format!(
+                "Unknown key 'servers.<name>.{key}'"
+            )));
+        }
+    }
+    let workflows = parse_workflows_config(value, "workflows")?;
+    Ok(ServerConfig { workflows })
+}
+
+fn parse_workflows_config(raw: &toml::Value, key: &str) -> Result<Option<WorkflowsConfig>> {
+    let Some(value) = raw.get(key) else {
+        return Ok(None);
+    };
+    let table = value
+        .as_table()
+        .ok_or_else(|| ConfigError::Validation(format!("'{key}' must be a table")))?;
+
+    let mut config = WorkflowsConfig::default();
+    for (field, field_value) in table {
+        match field.as_str() {
+            "workers" => {
+                config.base.workers = Some(parse_u32_field(field_value, &format!("{key}.workers"))?)
+            }
+            "concurrency" => {
+                config.base.concurrency =
+                    Some(parse_u32_field(field_value, &format!("{key}.concurrency"))?)
+            }
+            worker => {
+                let group_table = field_value.as_table().ok_or_else(|| {
+                    ConfigError::Validation(format!("'{key}.{worker}' must be a table"))
+                })?;
+                config.groups.insert(
+                    worker.to_string(),
+                    parse_workflow_worker_config(group_table, &format!("{key}.{worker}"))?,
+                );
+            }
+        }
+    }
+
+    Ok(Some(config))
+}
+
+fn parse_workflow_worker_config(
+    table: &toml::value::Table,
+    path: &str,
+) -> Result<WorkflowWorkerConfig> {
+    let mut config = WorkflowWorkerConfig::default();
+    for (field, value) in table {
+        match field.as_str() {
+            "workers" => config.workers = Some(parse_u32_field(value, &format!("{path}.workers"))?),
+            "concurrency" => {
+                config.concurrency = Some(parse_u32_field(value, &format!("{path}.concurrency"))?)
+            }
+            other => {
+                return Err(ConfigError::Validation(format!(
+                    "Unknown key '{path}.{other}'"
+                )));
+            }
+        }
+    }
+    Ok(config)
+}
+
+fn parse_u32_field(value: &toml::Value, path: &str) -> Result<u32> {
+    let n = value
+        .as_integer()
+        .ok_or_else(|| ConfigError::Validation(format!("'{path}' must be an integer")))?;
+    u32::try_from(n).map_err(|_| {
+        ConfigError::Validation(format!("'{path}' must be between 0 and {}", u32::MAX))
+    })
 }
 
 fn parse_build_config(raw: &toml::Value) -> Result<BuildConfig> {

@@ -52,7 +52,7 @@ name = "my-app"
 A workflow file in `workflows/` is enough — `tako dev` and `tako deploy` pick it up automatically. To pin workers up in production:
 
 ```toml
-[servers.workflows]
+[workflows]
 workers = 1
 concurrency = 10
 ```

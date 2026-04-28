@@ -443,7 +443,9 @@ impl StubKind {
                 format!("export default defineChannel(\"{stem}\").$messageTypes<{{}}>();")
             }
             Self::Workflow => {
-                format!("export default defineWorkflow(\"{stem}\", async () => {{}});")
+                format!(
+                    "export default defineWorkflow(\"{stem}\", {{ handler: async () => {{}} }});"
+                )
             }
         }
     }
@@ -649,7 +651,10 @@ mod tests {
 
         let workflow = fs::read_to_string(dir.path().join("workflows").join("demo.ts")).unwrap();
         assert!(workflow.contains(r#"import { defineWorkflow } from "tako.sh";"#));
-        assert!(workflow.contains(r#"export default defineWorkflow("demo", async () => {});"#));
+        assert!(
+            workflow
+                .contains(r#"export default defineWorkflow("demo", { handler: async () => {} });"#)
+        );
     }
 
     #[test]
@@ -670,9 +675,9 @@ mod tests {
             channel.contains(r#"export default defineChannel("mission-log").$messageTypes<{}>();"#)
         );
         let workflow = fs::read_to_string(workflows_dir.join("send-email.ts")).unwrap();
-        assert!(
-            workflow.contains(r#"export default defineWorkflow("send-email", async () => {});"#)
-        );
+        assert!(workflow.contains(
+            r#"export default defineWorkflow("send-email", { handler: async () => {} });"#
+        ));
     }
 
     #[test]
@@ -706,9 +711,9 @@ mod tests {
         let workflow = fs::read_to_string(workflows_dir.join("send-email.ts")).unwrap();
         assert!(workflow.starts_with("import { defineWorkflow } from \"tako.sh\";\n"));
         assert!(workflow.contains("const send = async () => {};"));
-        assert!(
-            workflow.contains(r#"export default defineWorkflow("send-email", async () => {});"#)
-        );
+        assert!(workflow.contains(
+            r#"export default defineWorkflow("send-email", { handler: async () => {} });"#
+        ));
     }
 
     #[test]

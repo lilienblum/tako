@@ -60,6 +60,17 @@ impl Config {
         for asset_path in &self.assets {
             validate_asset_path(asset_path)?;
         }
+        for worker_name in self.workflows.groups.keys() {
+            validate_workflow_worker_name(worker_name)?;
+        }
+        for (server_name, server) in &self.servers.per_server {
+            validate_server_name(server_name)?;
+            if let Some(workflows) = &server.workflows {
+                for worker_name in workflows.groups.keys() {
+                    validate_workflow_worker_name(worker_name)?;
+                }
+            }
+        }
         if let Some(cwd) = &self.build.cwd {
             validate_relative_dir(cwd, "build.cwd")?;
         }
@@ -170,6 +181,7 @@ pub(super) fn validate_top_level_keys(raw: &toml::Value) -> Result<()> {
                 | "release"
                 | "build"
                 | "build_stages"
+                | "workflows"
                 | "vars"
                 | "envs"
                 | "servers"
@@ -382,6 +394,15 @@ pub(super) fn validate_server_name(name: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn validate_workflow_worker_name(name: &str) -> Result<()> {
+    validate_server_name(name).map_err(|_| {
+        ConfigError::Validation(format!(
+            "Workflow worker group '{}' must start with a lowercase letter and contain only lowercase letters, numbers, and hyphens",
+            name
+        ))
+    })
 }
 
 /// Validate route pattern format

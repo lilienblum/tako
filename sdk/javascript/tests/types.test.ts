@@ -8,6 +8,8 @@ import type {
 } from "../src/types";
 import { defineChannel } from "../src/channels/define";
 import type { ChannelDefinition } from "../src/channels/define";
+import { defineWorkflow } from "../src/workflows/define";
+import type { WorkflowOpts } from "../src/workflows/types";
 
 describe("Types", () => {
   describe("FetchHandler", () => {
@@ -90,6 +92,19 @@ describe("Types", () => {
 
       expect(subscription.transport).toBe("sse");
       expect(socket.transport).toBe("ws");
+    });
+  });
+
+  describe("workflow types", () => {
+    test("accepts a worker group in workflow opts", () => {
+      const opts = {
+        retries: 4,
+        worker: "media",
+        handler: async (_payload: { imageId: string }) => {},
+      } satisfies WorkflowOpts<{ imageId: string }>;
+      const workflow = defineWorkflow("process-image", opts);
+
+      expect(workflow.definition.opts.worker).toBe("media");
     });
   });
 });

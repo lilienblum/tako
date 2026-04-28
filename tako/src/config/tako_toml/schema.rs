@@ -56,11 +56,12 @@ pub struct Config {
     /// Can be overridden per environment via `[envs.<name>].release`.
     pub release: Option<String>,
 
+    /// [workflows] section - base workflow worker configuration and named
+    /// worker-group overrides.
+    #[serde(default)]
+    pub workflows: WorkflowsConfig,
+
     /// [servers.*] sections - per-app-per-server configuration.
-    ///
-    /// The reserved key `workflows` under `[servers]` is the default workflows
-    /// config inherited by all servers. Any other key under `[servers]` is a
-    /// per-server override that can itself contain a `[workflows]` sub-section.
     #[serde(default)]
     pub servers: ServersConfig,
 }
@@ -148,20 +149,11 @@ fn default_concurrency() -> u32 {
     10
 }
 
-/// [servers] section — defaults + per-server overrides.
-///
-/// The reserved key `workflows` holds the default workflows config for all
-/// servers; any other key is a per-server override.
+/// [servers] section — per-server overrides.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct ServersConfig {
-    /// Default workflows config applied to every server unless a per-server
-    /// override is present. Populated from `[servers.workflows]`.
-    #[serde(default)]
-    pub workflows: Option<WorkflowsConfig>,
-
     /// Per-server overrides. Keyed by server name. Populated from
-    /// `[servers.<name>]`. The key `workflows` is reserved for the default
-    /// and will not appear here.
+    /// `[servers.<name>]`.
     #[serde(default, flatten)]
     pub per_server: HashMap<String, ServerConfig>,
 }
@@ -175,10 +167,10 @@ pub struct ServerConfig {
     pub workflows: Option<WorkflowsConfig>,
 }
 
-/// Workflows configuration (cron/task engine).
+/// Concrete workflow worker settings after inheritance.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct WorkflowsConfig {
+pub struct EffectiveWorkflowsConfig {
     /// Number of always-on worker processes. `0` means scale-to-zero:
     /// spawn on enqueue/cron tick, exit after `worker_idle_timeout`.
     #[serde(default = "default_workers")]
@@ -189,11 +181,45 @@ pub struct WorkflowsConfig {
     pub concurrency: u32,
 }
 
-impl Default for WorkflowsConfig {
+impl Default for EffectiveWorkflowsConfig {
     fn default() -> Self {
         Self {
             workers: default_workers(),
             concurrency: default_concurrency(),
         }
     }
+}
+
+/// Partial workflow worker settings from `[workflows]`,
+/// `[workflows.<worker>]`, `[servers.<name>.workflows]`, and
+/// `[servers.<name>.workflows.<worker>]`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowWorkerConfig {
+    /// Number of always-on worker processes. `0` means scale-to-zero.
+    pub workers: Option<u32>,
+
+    /// Max parallel task slots per worker.
+    pub concurrency: Option<u32>,
+}
+
+impl WorkflowWorkerConfig {
+    pub fn apply_to(&self, target: &mut EffectiveWorkflowsConfig) {
+        if let Some(workers) = self.workers {
+            target.workers = workers;
+        }
+        if let Some(concurrency) = self.concurrency {
+            target.concurrency = concurrency;
+        }
+    }
+}
+
+/// Workflow worker configuration with a base config and named worker-group
+/// overrides.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkflowsConfig {
+    pub base: WorkflowWorkerConfig,
+
+    #[serde(default)]
+    pub groups: HashMap<String, WorkflowWorkerConfig>,
 }

@@ -352,9 +352,11 @@ import sendEmail from "../workflows/send-email";
 await sendEmail.enqueue({ to: "user@example.com" });
 ```
 
-Each workflow module default-exports a typed handle from `defineWorkflow<P>(name, handler, config?)`. The handle's `.enqueue(payload, opts?)` method is type-checked against the declared payload `P` — no codegen step is needed for enqueue typing.
+Each workflow module default-exports a typed handle from `defineWorkflow<P>(name, opts)`, where `opts.handler` is the workflow body. The handle's `.enqueue(payload, opts?)` method is type-checked against the declared payload `P` — no codegen step is needed for enqueue typing.
 
 Workers run as a **separate process** from HTTP instances, so heavy workflow dependencies (image libraries, ML bindings) don't bloat the request-serving binary. Workers receive the same environment, `TAKO_DATA_DIR`, and fd-3 secrets as HTTP instances. By default a worker is scale-to-zero: it spawns on the first enqueue or cron tick, exits when idle long enough, and respawns on demand.
+
+Use `worker: "name"` in workflow opts to assign a workflow to a named worker group. Workflows without `worker` belong to the `default` group; worker processes launched with `TAKO_WORKFLOW_WORKER=<name>` load only that group.
 
 Features you get for free:
 
