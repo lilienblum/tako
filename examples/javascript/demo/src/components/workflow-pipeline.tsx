@@ -20,9 +20,9 @@ export const WorkflowPipeline = memo(function WorkflowPipeline({ request }: Prop
     <div className="relative pt-2">
       <div
         className="
-          absolute inset-x-5.5 top-3.75 z-0 h-0.5 bg-surface-container-lowest
-          sm:inset-x-8
-        "
+      absolute inset-x-5.5 top-3.75 z-0 h-0.5 bg-surface-container-lowest
+      sm:inset-x-8
+    "
       />
       <TrackFill isComplete={isComplete} stepStates={stepStates} />
       <div className="relative z-10 flex justify-between">
@@ -57,9 +57,9 @@ function TrackFill({
   return (
     <div
       className="
-        absolute inset-x-[22px] top-[15px] z-0 h-0.5
-        sm:inset-x-8
-      "
+     absolute inset-x-[22px] top-[15px] z-0 h-0.5
+     sm:inset-x-8
+   "
     >
       <motion.div
         className="h-full origin-left bg-primary will-change-transform"
@@ -93,13 +93,7 @@ function StepPill({
           <CheckIcon
             size={10}
             weight="bold"
-            className={
-              isComplete
-                ? "text-primary-container"
-                : `
-              text-on-primary-container
-            `
-            }
+            className={isComplete ? "text-primary-container" : `text-on-primary-container`}
             aria-hidden="true"
           />
         )}
@@ -110,19 +104,19 @@ function StepPill({
       </div>
       <span
         className={`
-          w-11 text-center font-mono text-[10px] leading-tight uppercase
-          sm:w-16 sm:text-[11px]
-          ${labelClass}
-        `}
+      w-11 text-center font-mono text-[10px] leading-tight uppercase
+      sm:w-16 sm:text-[11px]
+      ${labelClass}
+    `}
       >
         {label}
       </span>
       {retries > 0 && (
         <span
           className="
-            inline-flex items-center gap-0.5 font-mono text-[9px]
-            tracking-widest text-[--color-tertiary] uppercase
-          "
+       inline-flex items-center gap-0.5 font-mono text-[9px] tracking-widest
+       text-[--color-tertiary] uppercase
+     "
         >
           <ArrowClockwiseIcon className="size-2.5" aria-hidden="true" />×{retries}
         </span>
