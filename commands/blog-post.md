@@ -91,8 +91,7 @@ image:
 
 Generate a wide illustration for a blog post hero image.
 
-Character: A small, simple octopus. Reference: https://tako.sh/assets/logo.svg
-The octopus must match the style of our logo — flat, minimal, no outlines, soft pastel coral pink body with simple dot eyes and a small curved mouth. Not 3D, not shiny, not glossy. Expressive and full of personality — eyes can squint, widen, or glance; the mouth can grin, gasp, or smirk; tentacles are always doing something. Stylized, not realistic, and not hyper-kawaii either.
+Character: A small, simple octopus matching the attached logo image — flat, minimal, no outlines, soft pastel coral pink body with simple dot eyes and a small curved mouth. Not 3D, not shiny, not glossy. Expressive and full of personality — eyes can squint, widen, or glance; the mouth can grin, gasp, or smirk; tentacles are always doing something. Stylized, not realistic, and not hyper-kawaii either.
 
 Scene: [This is the most important section. Do not describe a "scene" — describe a STORY MOMENT, but describe it **purely visually, without naming any source**.
 
@@ -177,7 +176,7 @@ Again: the table is a nudge, not a box. A post about WebSocket channels might bo
 
 If the answer to "what moment?" is fuzzy, stop and pick one before writing the scene. If the squint test fails, pick a moment that shows the post's subject more literally. If the answer to "did I avoid naming anything?" is "no," strip the names and replace them with visual detail.
 
-After writing the post, copy the image prompt text (everything between the `<!-- IMAGE PROMPT` and `-->` markers, excluding the markers themselves) to the clipboard using `pbcopy`.
+After writing the post, copy the image prompt text (everything between the `<!-- IMAGE PROMPT` and `-->` markers, excluding the markers themselves) to the clipboard using `pbcopy`. Then remind the user to **attach `website/public/assets/logo.svg` as an image input** to the ChatGPT message alongside the pasted prompt — ChatGPT's image gen can't fetch URLs, so the SVG must be attached directly to ground the octopus on the real logo.
 
 After the user downloads the image, they run `just blog::img` which resizes (capped at 1400px wide, aspect ratio preserved), converts to webp, and outputs the hash ID to put in the `image:` frontmatter field.
 
