@@ -1,6 +1,4 @@
-# Tako
-
-<img src="website/public/assets/og.svg" alt="Tako logo" />
+<img src="assets/readme-banner.svg" alt="Tako logo" />
 
 [![npm: tako.sh](https://img.shields.io/npm/v/tako.sh?label=npm%3A%20tako.sh&color=9BC4B6)](https://www.npmjs.com/package/tako.sh)
 
