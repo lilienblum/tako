@@ -2024,6 +2024,7 @@ async fn status_includes_running_builds_for_each_version() {
     );
 }
 
+// CodeQL[rust/cleartext-logging]: hardcoded fixture secrets in tests; set_secrets encrypts at rest and update_secrets logs only app name.
 #[tokio::test]
 async fn run_release_executes_command_in_release_dir() {
     let temp = TempDir::new().unwrap();
@@ -2091,6 +2092,7 @@ async fn run_release_executes_command_in_release_dir() {
     assert_eq!(written, "production-postgres://x");
 }
 
+// CodeQL[rust/cleartext-logging]: hardcoded fixture secrets in tests; set_secrets encrypts at rest and update_secrets logs only app name.
 #[tokio::test]
 async fn run_release_returns_error_on_nonzero_exit() {
     let temp = TempDir::new().unwrap();
