@@ -355,12 +355,14 @@ mod instance_management {
         }
 
         let server = TestServer::start();
+        let app_id = "test-app/production";
 
         // Create a Bun app that serves requests on PORT.
         let app_dir = server
             .data_dir()
             .join("apps")
             .join("test-app")
+            .join("production")
             .join("releases")
             .join("v1");
         fs::create_dir_all(&app_dir).unwrap();
@@ -423,12 +425,10 @@ Bun.serve({
 
         let deploy_cmd = serde_json::json!({
             "command": "deploy",
-            "app": "test-app",
+            "app": app_id,
             "version": "v1",
             "path": app_dir.to_string_lossy(),
             "routes": ["test-app.localhost"],
-            "instances": 1,
-            "idle_timeout": 300
         });
 
         let deploy_response = server.send_command(&deploy_cmd);
@@ -447,8 +447,8 @@ Bun.serve({
             .expect("response should include data.apps array");
         assert!(
             apps.iter()
-                .any(|a| a.get("name").and_then(|n| n.as_str()) == Some("test-app")),
-            "expected test-app in list response: {list_response}"
+                .any(|a| a.get("name").and_then(|n| n.as_str()) == Some(app_id)),
+            "expected {app_id} in list response: {list_response}"
         );
     }
 }
@@ -549,10 +549,12 @@ mod channels {
     use std::net::TcpStream;
 
     fn deploy_chat_app(server: &TestServer) {
+        let app_id = "chat-app/production";
         let app_dir = server
             .data_dir()
             .join("apps")
             .join("chat-app")
+            .join("production")
             .join("releases")
             .join("v1");
         fs::create_dir_all(&app_dir).unwrap();
@@ -647,12 +649,10 @@ Bun.serve({
 
         let deploy_cmd = serde_json::json!({
             "command": "deploy",
-            "app": "chat-app",
+            "app": app_id,
             "version": "v1",
             "path": app_dir.to_string_lossy(),
             "routes": ["chat-app.localhost"],
-            "instances": 1,
-            "idle_timeout": 300
         });
 
         let deploy_response = server.send_command(&deploy_cmd);

@@ -268,6 +268,7 @@ impl E2EEnvironment {
             .path()
             .join("apps")
             .join(app)
+            .join("production")
             .join("releases")
             .join(version);
         fs::create_dir_all(&app_dir).unwrap();
@@ -332,16 +333,14 @@ fn deploy_command(
     version: &str,
     path: &std::path::Path,
     routes: &[&str],
-    instances: u8,
+    _instances: u8,
 ) -> serde_json::Value {
     serde_json::json!({
         "command": "deploy",
-        "app": app,
+        "app": tako_core::deployment_app_id(app, "production"),
         "version": version,
         "path": path.to_string_lossy(),
         "routes": routes,
-        "instances": instances,
-        "idle_timeout": 300
     })
 }
 

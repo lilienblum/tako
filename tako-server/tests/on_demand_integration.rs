@@ -40,48 +40,40 @@ fn run_on_demand_case() -> Result<(), String> {
         .data_dir()
         .join("apps")
         .join("test-app")
+        .join("production")
         .join("releases")
         .join("v1");
     fs::create_dir_all(&app_dir).map_err(|e| e.to_string())?;
     write_bun_app(&app_dir, "hello");
+    fs::write(
+        app_dir.join("app.json"),
+        r#"{"runtime":"bun","main":"src/index.ts","idle_timeout":5,"install":"true","start":["bun","{main}"]}"#,
+    )
+    .map_err(|e| e.to_string())?;
 
     let host = "test.localhost";
 
     let resp = server.send_command(&serde_json::json!({
         "command": "deploy",
-        "app": "test-app",
+        "app": app_id,
         "version": "v1",
         "path": app_dir.to_string_lossy(),
         "routes": [host],
-        "instances": 0,
-        "idle_timeout": 5,
     }));
     if resp.get("status").and_then(|s| s.as_str()) != Some("ok") {
         return Err(format!("deploy failed: {resp:?}"));
     }
 
-    // Deploy should leave one warm instance so the app is immediately reachable.
-    // Poll status since the app may take a moment to become visible.
-    let mut warm_status = serde_json::Value::Null;
-    let warm_ok = wait_for(Duration::from_secs(10), || {
-        let resp = server.send_command(&serde_json::json!({
-            "command": "status",
-            "app": app_id,
-        }));
-        warm_status = resp.clone();
-        resp.get("data")
-            .and_then(|d| d.get("instances"))
-            .and_then(|v| v.as_array())
-            .map(|arr| arr.len() == 1)
-            .unwrap_or(false)
-    });
-    if !warm_ok {
-        return Err(format!(
-            "expected one warm instance after on-demand deploy: {warm_status:?}"
-        ));
+    let resp = server.send_command(&serde_json::json!({
+        "command": "scale",
+        "app": app_id,
+        "instances": 0,
+    }));
+    if resp.get("status").and_then(|s| s.as_str()) != Some("ok") {
+        return Err(format!("scale-to-zero failed: {resp:?}"));
     }
 
-    // First request should succeed (warm instance may already be running).
+    // First request should cold start the app and succeed.
     let mut first_last_status = String::new();
     let first_ok = wait_for(Duration::from_secs(30), || {
         match server.https_status(host, "/") {
@@ -161,12 +153,41 @@ fn on_demand_startup_failure_does_not_hang() {
     }
 
     let server = TestServer::start();
+    let app_id = "failing-app/production";
+    let app_v1_dir = server
+        .data_dir()
+        .join("apps")
+        .join("failing-app")
+        .join("production")
+        .join("releases")
+        .join("v1");
+    fs::create_dir_all(&app_v1_dir).expect("create app v1 dir");
+    write_bun_app(&app_v1_dir, "hello");
+
+    let host = "failing.localhost";
+    let resp = server.send_command(&serde_json::json!({
+        "command": "deploy",
+        "app": app_id,
+        "version": "v1",
+        "path": app_v1_dir.to_string_lossy(),
+        "routes": [host],
+    }));
+    assert_eq!(resp.get("status").and_then(|s| s.as_str()), Some("ok"));
+
+    let resp = server.send_command(&serde_json::json!({
+        "command": "scale",
+        "app": app_id,
+        "instances": 0,
+    }));
+    assert_eq!(resp.get("status").and_then(|s| s.as_str()), Some("ok"));
+
     let app_dir = server
         .data_dir()
         .join("apps")
         .join("failing-app")
+        .join("production")
         .join("releases")
-        .join("v1");
+        .join("v2");
     fs::create_dir_all(&app_dir).expect("create app dir");
     fs::create_dir_all(app_dir.join("src")).expect("create src dir");
     fs::write(
@@ -193,15 +214,12 @@ fn on_demand_startup_failure_does_not_hang() {
     )
     .expect("write deploy manifest");
 
-    let host = "failing.localhost";
     let resp = server.send_command(&serde_json::json!({
         "command": "deploy",
-        "app": "failing-app",
-        "version": "v1",
+        "app": app_id,
+        "version": "v2",
         "path": app_dir.to_string_lossy(),
         "routes": [host],
-        "instances": 0,
-        "idle_timeout": 1,
     }));
     match resp.get("status").and_then(|s| s.as_str()) {
         Some("error") => {

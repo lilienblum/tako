@@ -15,16 +15,19 @@ fn rolling_update_deploy_updates_version_and_serves_new_code() {
     }
 
     let server = TestServer::start();
+    let app_id = "test-app/production";
     let app_dir_v1 = server
         .data_dir()
         .join("apps")
         .join("test-app")
+        .join("production")
         .join("releases")
         .join("v1");
     let app_dir_v2 = server
         .data_dir()
         .join("apps")
         .join("test-app")
+        .join("production")
         .join("releases")
         .join("v2");
     fs::create_dir_all(&app_dir_v1).unwrap();
@@ -36,12 +39,10 @@ fn rolling_update_deploy_updates_version_and_serves_new_code() {
 
     let resp = server.send_command(&serde_json::json!({
         "command": "deploy",
-        "app": "test-app",
+        "app": app_id,
         "version": "v1",
         "path": app_dir_v1.to_string_lossy(),
         "routes": [host],
-        "instances": 1,
-        "idle_timeout": 300,
     }));
     assert_eq!(
         resp.get("status").and_then(|s| s.as_str()),
@@ -69,12 +70,10 @@ fn rolling_update_deploy_updates_version_and_serves_new_code() {
 
     let resp = server.send_command(&serde_json::json!({
         "command": "deploy",
-        "app": "test-app",
+        "app": app_id,
         "version": "v2",
         "path": app_dir_v2.to_string_lossy(),
         "routes": [host],
-        "instances": 1,
-        "idle_timeout": 300,
     }));
     assert_eq!(
         resp.get("status").and_then(|s| s.as_str()),
@@ -103,7 +102,7 @@ fn rolling_update_deploy_updates_version_and_serves_new_code() {
         wait_for(Duration::from_secs(90), || {
             let resp = server.send_command(&serde_json::json!({
                 "command": "status",
-                "app": "test-app",
+                "app": app_id,
             }));
             last_status = resp.clone();
             let data = match resp.get("data") {

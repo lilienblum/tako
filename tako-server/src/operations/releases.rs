@@ -215,6 +215,24 @@ fn tail_string(s: &str, max_bytes: usize) -> String {
     if s.len() <= max_bytes {
         return s.to_string();
     }
-    let start = s.len() - max_bytes;
+    let mut start = s.len() - max_bytes;
+    while !s.is_char_boundary(start) {
+        start += 1;
+    }
     format!("…{}", &s[start..])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tail_string_handles_multibyte_boundary() {
+        let input = "あ".repeat(2_000);
+
+        let tail = tail_string(&input, 4_000);
+
+        assert!(tail.starts_with('…'));
+        assert!(tail.len() <= 4_000 + "…".len());
+    }
 }
