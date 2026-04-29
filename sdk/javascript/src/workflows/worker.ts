@@ -27,13 +27,13 @@ import type { Run, StepState } from "./types";
 
 export type WorkflowHandler<P = unknown> = (
   payload: P,
-  ctx: WorkflowContext,
+  step: WorkflowContext,
 ) => Promise<void> | void;
 
 export interface WorkflowContext {
   readonly runId: string;
   readonly workflowName: string;
-  readonly attempts: number;
+  readonly attempt: number;
   run<T>(name: string, fn: () => Promise<T> | T, opts?: StepRunOptions): Promise<T>;
   sleep(name: string, durationMs: number): Promise<void>;
   waitFor<T = unknown>(name: string, opts?: StepWaitOptions): Promise<T | null>;
@@ -215,10 +215,10 @@ export class Worker {
     }
 
     const stepState: StepState = { ...run.stepState };
-    const ctx: WorkflowContext = {
+    const step: WorkflowContext = {
       runId: run.id,
       workflowName: run.name,
-      attempts: run.attempts,
+      attempt: run.attempts,
       ...createStepAPI(this.client, run.id, this.workerId, stepState, runLog),
       bail: (reason?: string): never => {
         throw new BailSignal(reason);
@@ -238,7 +238,7 @@ export class Worker {
 
     runLog.info("Workflow started", { attempt: run.attempts, payload: run.payload });
     try {
-      await reg.handler(run.payload, ctx);
+      await reg.handler(run.payload, step);
       await this.client.complete(run.id, this.workerId);
       runLog.info("Workflow completed");
     } catch (err) {

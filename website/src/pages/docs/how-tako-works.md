@@ -362,8 +362,8 @@ Features you get for free:
 
 - **Retries with exponential backoff** (1s base, capped at 1h, ±20% jitter).
 - **Delayed runs** (`runAt: new Date(...)`) and **cron schedules** declared in the `defineWorkflow` config (`schedule: "0 9 * * *"`).
-- **Multi-step workflows** via `ctx.run("name", fn)`. Step results are checkpointed to SQLite, so a crashed run resumes from the last completed step on retry.
-- **Events** via `signal(event, payload?)` — also exported from `tako.sh` — and `ctx.waitFor(name, opts)`. Long `ctx.sleep(...)` calls defer the run back into the queue instead of blocking a worker slot.
+- **Multi-step workflows** via `step.run("name", fn)`. Step results are checkpointed to SQLite, so a crashed run resumes from the last completed step on retry.
+- **Events** via `signal(event, payload?)` — also exported from `tako.sh` — and `step.waitFor(name, opts)`. Long `step.sleep(...)` calls defer the run back into the queue instead of blocking a worker slot.
 - **Graceful drain** — `tako stop` and `tako delete` wait for in-flight runs (up to 120s) before tearing down.
 
 Queue state lives in `{tako_data_dir}/apps/<app>/runs.db` (SQLite with WAL). `tako-server` owns the database and the shared internal socket; the worker polls over that socket. Enqueues from HTTP handlers go over the same socket, so there's no external queue service, no Redis, no Postgres required.

@@ -1,16 +1,16 @@
 /**
  * Step API + workflow control signals.
  *
- * `ctx.run(name, fn, opts?)` memoizes fn's result in the run's steps
+ * `step.run(name, fn, opts?)` memoizes fn's result in the run's steps
  * table. On retry, completed steps return their stored value instead of
  * re-executing. Per-step `retries`/`backoff`/`retry: false` options control
  * in-step retry behavior independent of the run-level retry budget.
  *
- * `ctx.sleep(name, durationMs)` waits durably. Short sleeps are
+ * `step.sleep(name, durationMs)` waits durably. Short sleeps are
  * inline; long sleeps (≥INLINE_SLEEP_THRESHOLD_MS) defer the run via
  * `client.defer` so the worker can release.
  *
- * `ctx.waitFor(name, opts?)` parks the run until a matching
+ * `step.waitFor(name, opts?)` parks the run until a matching
  * `workflowsEngine.signal(eventName, payload)` (from `tako.sh/internal`) arrives or the timeout fires.
  * Resumption hydrates the event payload as the step's result.
  *

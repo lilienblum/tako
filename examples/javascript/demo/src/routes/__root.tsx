@@ -9,7 +9,7 @@ export const Route = createRootRoute({
       {
         name: "description",
         content:
-          "A Tako demo: each moonbase is an isolated tenant. Supply requests fan out across parallel workflows with a live mission log.",
+          "A Tako demo: each moonbase is an isolated tenant. Supply requests run through a durable workflow with a live mission log.",
       },
     ],
     links: [

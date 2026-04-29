@@ -45,21 +45,23 @@ function shouldStepFail(requestId: string, step: Step, attempt: number): boolean
 }
 
 export default defineWorkflow<OrderShipmentPayload>("order-shipment", {
-  handler: async (payload, ctx) => {
+  retries: MAX_ATTEMPTS - 1,
+  handler: async (payload, step) => {
     const { requestId, base, item } = payload;
     const channel = missionLog({ base });
 
-    async function emit(event: Omit<MissionLogEvent, "id" | "requestId" | "timestamp">) {
+    async function emit(
+      idSuffix: string,
+      event: Omit<MissionLogEvent, "id" | "requestId" | "timestamp">,
+    ) {
       const full: MissionLogEvent = {
-        id: crypto.randomUUID(),
+        id: `${requestId}:${idSuffix}`,
         requestId,
         timestamp: Date.now(),
         ...event,
       };
       const request = applyMissionEventToRequest(full);
-      if (!request) {
-        return;
-      }
+      if (!request) return;
       try {
         const update: MissionChannelUpdate = { request, event: full };
         await channel.publish({ type: "update", data: update });
@@ -68,53 +70,56 @@ export default defineWorkflow<OrderShipmentPayload>("order-shipment", {
       }
     }
 
-    await emit({
-      source: base,
-      level: "info",
-      message: `Request received: ${item}`,
-    });
+    await step.run("received", () =>
+      emit("received", {
+        source: base,
+        level: "info",
+        message: `Request received: ${item}`,
+      }),
+    );
 
-    for (const step of PIPELINE_STEPS) {
-      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-        await emit({
+    for (const stepName of PIPELINE_STEPS) {
+      await step.run(stepName, async () => {
+        const attempt = step.attempt;
+        await emit(`${stepName}-running-${attempt}`, {
           source: base,
           level: "info",
-          message: labelFor(step, "running"),
-          step,
+          message: labelFor(stepName, "running"),
+          step: stepName,
           status: "running",
         });
-        await ctx.sleep(`${step}-wait-${attempt}`, STEP_TIMINGS[step]);
+        await new Promise((r) => setTimeout(r, STEP_TIMINGS[stepName]));
 
-        if (shouldStepFail(requestId, step, attempt)) {
-          await emit({
+        if (shouldStepFail(requestId, stepName, attempt)) {
+          await emit(`${stepName}-failed-${attempt}`, {
             source: "System",
             level: "warn",
-            message: `${labelFor(step, "failed")} (attempt ${attempt}/${MAX_ATTEMPTS})`,
-            step,
+            message: `${labelFor(stepName, "failed")} (attempt ${attempt}/${MAX_ATTEMPTS})`,
+            step: stepName,
             status: "failed",
           });
-          await ctx.sleep(`${step}-retry-${attempt}`, 800);
-          continue;
+          throw new Error(`${stepName} failed (attempt ${attempt})`);
         }
 
-        await emit({
+        await emit(`${stepName}-done-${attempt}`, {
           source: base,
           level: "info",
-          message: labelFor(step, "done"),
-          step,
+          message: labelFor(stepName, "done"),
+          step: stepName,
           status: "done",
         });
-        break;
-      }
+      });
     }
 
-    await emit({
-      source: base,
-      level: "info",
-      message: `REQ-${shortId(requestId)} complete`,
-      step: "complete",
-      status: "done",
-    });
+    await step.run("complete", () =>
+      emit("complete", {
+        source: base,
+        level: "info",
+        message: `REQ-${shortId(requestId)} complete`,
+        step: "complete",
+        status: "done",
+      }),
+    );
   },
 });
 

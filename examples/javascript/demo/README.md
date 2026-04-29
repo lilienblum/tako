@@ -2,7 +2,7 @@
 
 A TanStack Start demo app that doubles as a live tour of Tako's primitives: **multi-tenancy**, **durable workflows**, and **channels**.
 
-Each moonbase is an isolated tenant (wildcard subdomain). Submitting a supply request enqueues a six-step workflow (oxygen check → cargo → rover → launch → landing, with a fallback trajectory path). Every step publishes to the `mission-log` channel, so the right-rail log streams live to every connected client.
+Each moonbase is an isolated tenant (wildcard subdomain). Submitting a supply request enqueues a five-step sequential workflow (check → pack → load → ship → deliver) where the late steps occasionally throw and Tako retries them via `step.run`'s `retries` option. Every step publishes to the `mission-log` channel, so the right-rail log streams live to every connected client.
 
 Live at [demo.tako.sh](https://demo.tako.sh).
 
@@ -46,7 +46,7 @@ bun run build
 
 ## Files of interest
 
-- `workflows/order-shipment.ts` — six-step fan-out workflow
+- `workflows/order-shipment.ts` — five-step sequential workflow with `step.run` retries
 - `channels/mission-log.ts` — pub/sub channel for live events
 - `src/routes/index.tsx` — route glue, server loader, local-mode simulator
 - `src/components/moonbase/` — all UI components (MissionControl, Landing, Sidebar, etc.)

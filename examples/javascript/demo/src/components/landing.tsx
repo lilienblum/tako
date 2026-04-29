@@ -67,8 +67,8 @@ export function Landing({ rootHost }: Props) {
           </h1>
           <p className="mb-10 max-w-xl text-base/relaxed text-muted-foreground">
             Dispatch supplies to your own lunar outpost. Each base is an isolated Tako tenant — spin
-            one up by name, submit a supply request, and watch a six-step workflow fan out with a
-            live mission log on the side.
+            one up by name, submit a supply request, and watch a five-step durable workflow run with
+            a live mission log on the side.
           </p>
 
           <form onSubmit={handleSubmit} className="mb-10">
