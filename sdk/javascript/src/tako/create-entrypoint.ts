@@ -12,7 +12,6 @@
 
 import { isAbsolute, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { dynImport } from "./dyn-import";
 import { handleTakoEndpoint } from "./endpoints";
 import { writeViaInheritedFd } from "./readiness";
 import { bootstrapChannels } from "../channels/bootstrap";
@@ -113,7 +112,7 @@ export function createEntrypoint(options: EntrypointOptions = {}) {
       // which lives under `node_modules/tako.sh/dist/`.
       const mainPath = isAbsolute(parsed.main) ? parsed.main : resolve(process.cwd(), parsed.main);
       const mainUrl = pathToFileURL(mainPath).href;
-      const module = (await dynImport(mainUrl)) as { default?: unknown };
+      const module = (await import(/* @vite-ignore */ mainUrl)) as { default?: unknown };
       const defaultExport = module.default;
       if (typeof defaultExport === "function") {
         const readyable = defaultExport as ReadyableFetchHandler;
