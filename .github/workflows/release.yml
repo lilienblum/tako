@@ -155,6 +155,12 @@ jobs:
 
           gh release edit latest --title "$title" --notes "$notes" --prerelease=false --draft=false
           gh release upload latest --clobber "${assets[@]}"
+          # Bump published_at so the GitHub sidebar shows the rolling release as recent.
+          # GitHub ignores published_at on a plain PATCH; toggling draft on→off re-stamps it.
+          release_id="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/latest" --jq .id)"
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" -F draft=true >/dev/null
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+            -F draft=false -f published_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)" >/dev/null
 
   publish-sdk:
     name: Publish SDK
