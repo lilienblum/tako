@@ -30,8 +30,8 @@ describe("package exports", () => {
     );
 
     expect(packageJson.exports["./client"]).toEqual({
-      types: "./dist/client.d.mts",
-      import: "./dist/client.mjs",
+      types: "./dist/client.d.ts",
+      import: "./dist/client.js",
     });
   });
 
@@ -52,8 +52,8 @@ describe("package exports", () => {
     );
 
     expect(packageJson.exports["./react"]).toEqual({
-      types: "./dist/react.d.mts",
-      import: "./dist/react.mjs",
+      types: "./dist/react.d.ts",
+      import: "./dist/react.js",
     });
   });
 

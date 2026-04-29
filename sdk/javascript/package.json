@@ -34,12 +34,12 @@
       "import": "./dist/index.mjs"
     },
     "./client": {
-      "types": "./dist/client.d.mts",
-      "import": "./dist/client.mjs"
+      "types": "./dist/client.d.ts",
+      "import": "./dist/client.js"
     },
     "./react": {
-      "types": "./dist/react.d.mts",
-      "import": "./dist/react.mjs"
+      "types": "./dist/react.d.ts",
+      "import": "./dist/react.js"
     },
     "./runtime": {
       "types": "./dist/runtime.d.mts",
