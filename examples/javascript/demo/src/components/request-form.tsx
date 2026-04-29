@@ -31,7 +31,11 @@ export const RequestForm = memo(function RequestForm({ tenantSlug, submitting, o
           <CardTitle className="text-xl font-bold tracking-tight uppercase">
             Request Supplies
           </CardTitle>
-          <CardDescription className="mt-1 font-mono text-xs tracking-wider uppercase">
+          <CardDescription
+            className="
+            mt-1 font-mono text-xs tracking-wider uppercase
+          "
+          >
             Sector: {formatBaseName(tenantSlug)}
           </CardDescription>
         </div>
