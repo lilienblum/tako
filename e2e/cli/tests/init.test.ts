@@ -88,6 +88,9 @@ describe("tako init (interactive wizard)", () => {
     });
 
     await term.waitForText("Overwrite?", { timeout: 5000 });
+    // The cursor-position escape sequence can arrive after the prompt text on
+    // slow runners; settle before asserting cursor placement.
+    await term.waitForIdle(250);
 
     let labelRow = findRowContaining(
       term,
