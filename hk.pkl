@@ -1,0 +1,70 @@
+amends "package://github.com/jdx/hk/releases/download/v1.53.0/hk@1.53.0#/Config.pkl"
+
+hooks {
+    ["pre-commit"] {
+        fix = true
+        stash = "git"
+        steps {
+            ["fmt"] = new Group {
+                steps = new Mapping<String, Step> {
+                    ["cargo-fmt"] = new Step {
+                        glob = List("*.rs")
+                        check = "cargo fmt --check"
+                        fix = "cargo fmt"
+                    }
+                    ["oxfmt"] = new Step {
+                        glob = List("*.ts", "*.tsx", "*.js", "*.jsx", "*.mjs", "*.cjs")
+                        check = "bun run fmt:check"
+                        fix = "bun run fmt"
+                    }
+                    ["gofmt"] = new Step {
+                        glob = List("*.go")
+                        fix = "gofmt -w {{files}}"
+                    }
+                }
+            }
+            ["lint"] = new Group {
+                steps = new Mapping<String, Step> {
+                    ["clippy"] = new Step {
+                        glob = List("*.rs", "*.toml", "Cargo.lock")
+                        check = "cargo clippy --workspace --all-targets"
+                        fix = "cargo clippy --fix --allow-dirty --allow-staged --workspace --all-targets"
+                    }
+                    ["oxlint"] = new Step {
+                        glob = List("*.ts", "*.tsx", "*.js", "*.jsx", "*.mjs", "*.cjs")
+                        check = "bun run lint"
+                        fix = "bun run lint:fix"
+                    }
+                    ["typecheck"] = new Step {
+                        glob = List("*.ts", "*.tsx")
+                        check = "bun run --filter '*' typecheck"
+                    }
+                    ["go-vet"] = new Step {
+                        glob = List("*.go")
+                        check = "go vet ./... && for dir in examples/go/*/; do (cd \"$dir\" && go vet ./...) || exit 1; done"
+                    }
+                }
+            }
+            ["test"] = new Group {
+                steps = new Mapping<String, Step> {
+                    ["unit-rust"] = new Step {
+                        glob = List("*.rs", "*.toml", "Cargo.lock")
+                        check = "just test unit-rust"
+                    }
+                    ["unit-js"] = new Step {
+                        glob = List("sdk/javascript/**/*")
+                        check = "just test unit-js"
+                    }
+                    ["unit-go"] = new Step {
+                        glob = List("sdk/go/**/*", "examples/go/**/*")
+                        check = "just test unit-go"
+                    }
+                    ["website"] = new Step {
+                        glob = List("website/**/*")
+                        check = "just check::website"
+                    }
+                }
+            }
+        }
+    }
+}

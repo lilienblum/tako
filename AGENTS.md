@@ -65,6 +65,8 @@ Tako's protocol is v0: do not keep any legacy code, backward compatibility shims
 
 ## Build & Test Commands
 
+Toolchain and git hooks are managed with [mise](https://mise.jdx.dev) (`mise.toml`) and [hk](https://hk.jdx.dev) (`hk.pkl`). One-time setup: `mise bootstrap --yes` (installs OS packages, tools, and git hooks). Pre-commit checks are defined in `hk.pkl`, not in shell scripts.
+
 ```bash
 # Build all
 cargo build

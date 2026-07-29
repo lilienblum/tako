@@ -1,0 +1,13 @@
+[tools]
+rust = "1.97"
+bun = "1.3"
+go = "1.26"
+just = "1"
+hk = "1.53"
+
+[bootstrap.packages]
+"brew:lychee" = "latest"
+
+[hooks]
+# Install/refresh git hooks whenever tools are installed
+postinstall = "hk install --mise"
