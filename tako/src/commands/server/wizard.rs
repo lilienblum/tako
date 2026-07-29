@@ -1,4 +1,5 @@
 use crate::output;
+use crate::ssh::SshConfig;
 use std::path::{Path, PathBuf};
 use tracing::Instrument;
 
@@ -38,7 +39,32 @@ pub async fn prompt_to_add_server(
         return Ok(None);
     }
 
-    run_add_server_wizard(None, None, 22, None, true, None, None).await
+    run_add_server_wizard(WizardDefaults::default()).await
+}
+
+/// Initial values for the add-server wizard, typically from CLI flags.
+pub(super) struct WizardDefaults<'a> {
+    pub name: Option<&'a str>,
+    pub description: Option<&'a str>,
+    pub port: u16,
+    pub public_ports: Option<ServerPublicPorts>,
+    pub test_ssh: bool,
+    pub admin_user: Option<&'a str>,
+    pub key_path: Option<&'a Path>,
+}
+
+impl Default for WizardDefaults<'_> {
+    fn default() -> Self {
+        Self {
+            name: None,
+            description: None,
+            port: 22,
+            public_ports: None,
+            test_ssh: true,
+            admin_user: None,
+            key_path: None,
+        }
+    }
 }
 
 pub struct AddServerOptions<'a> {
@@ -56,15 +82,19 @@ pub struct AddServerOptions<'a> {
 }
 
 pub(super) async fn run_add_server_wizard(
-    initial_name: Option<&str>,
-    initial_description: Option<&str>,
-    initial_port: u16,
-    initial_public_ports: Option<ServerPublicPorts>,
-    test_ssh: bool,
-    admin_user_default: Option<&str>,
-    initial_key_path: Option<&Path>,
+    defaults: WizardDefaults<'_>,
 ) -> Result<Option<String>, Box<dyn std::error::Error>> {
     use crate::config::{CliHistoryToml, ServersToml};
+
+    let WizardDefaults {
+        name: initial_name,
+        description: initial_description,
+        port: initial_port,
+        public_ports: initial_public_ports,
+        test_ssh,
+        admin_user: admin_user_default,
+        key_path: initial_key_path,
+    } = defaults;
 
     if !output::is_interactive() {
         return Err(
@@ -226,6 +256,8 @@ pub(super) async fn run_add_server_wizard(
         crate::ssh::set_key_passphrase(Some(passphrase));
     }
 
+    let ssh_config = SshConfig::from_server(&host, port).with_key_path(key_path.as_deref());
+
     // --- SSH connection test ---
     let mut remote_server_name: Option<String> = None;
     let mut detected_target: Option<crate::config::ServerTarget> = None;
@@ -238,7 +270,7 @@ pub(super) async fn run_add_server_wizard(
             "Connecting",
             "Connection successful",
             "Connection failed",
-            check_tako_connection(&host, port, key_path.as_deref()).instrument(host_span),
+            check_tako_connection(&ssh_config).instrument(host_span),
         )
         .await;
         drop(_t);
@@ -255,13 +287,11 @@ pub(super) async fn run_add_server_wizard(
                     .with_default(admin_user_default.unwrap_or("root"))
                     .prompt()?;
                 result = Ok(install_start_and_verify(
-                    &host,
-                    port,
+                    &ssh_config,
                     &admin_user,
                     public_ports,
                     VerifyLabels::INSTALL,
                     true,
-                    key_path.as_deref(),
                 )
                 .await?);
                 detected_public_ports = Some(public_ports);
@@ -275,15 +305,11 @@ pub(super) async fn run_add_server_wizard(
             let should_start = output::confirm("Start tako-server now?", true)?;
             if should_start {
                 let public_ports = install_public_ports(initial_public_ports)?;
-                result = Ok(start_and_verify(
-                    &host,
-                    port,
-                    public_ports,
-                    VerifyLabels::SERVER,
-                    true,
-                    key_path.as_deref(),
-                )
-                .await?);
+                result =
+                    Ok(
+                        start_and_verify(&ssh_config, public_ports, VerifyLabels::SERVER, true)
+                            .await?,
+                    );
                 detected_public_ports = Some(public_ports);
             }
         }
@@ -578,11 +604,12 @@ pub async fn add_server(
 
     // Test SSH connection unless skipped or already tested
     if (!no_test || install_if_missing) && detected_target.is_none() {
+        let ssh_config = SshConfig::from_server(host, port).with_key_path(key_path);
         let mut result = output::with_spinner_async_err(
             "Connecting",
             "Connection successful",
             "Connection failed",
-            check_tako_connection(host, port, key_path),
+            check_tako_connection(&ssh_config),
         )
         .await;
 
@@ -594,13 +621,11 @@ pub async fn add_server(
             let admin_user = admin_user.unwrap_or("root");
             let install_ports = install_public_ports(public_ports)?;
             result = Ok(install_start_and_verify(
-                host,
-                port,
+                &ssh_config,
                 admin_user,
                 install_ports,
                 VerifyLabels::INSTALL,
                 false,
-                key_path,
             )
             .await?);
             resolved_public_ports = Some(install_ports);
@@ -612,13 +637,11 @@ pub async fn add_server(
                     .with_default(admin_user.unwrap_or("root"))
                     .prompt()?;
                 result = Ok(install_start_and_verify(
-                    host,
-                    port,
+                    &ssh_config,
                     &admin_user,
                     install_ports,
                     VerifyLabels::INSTALL,
                     false,
-                    key_path,
                 )
                 .await?);
                 resolved_public_ports = Some(install_ports);
@@ -639,15 +662,11 @@ pub async fn add_server(
             };
             if should_configure {
                 let configure_ports = install_public_ports(public_ports)?;
-                result = Ok(start_and_verify(
-                    host,
-                    port,
-                    configure_ports,
-                    VerifyLabels::SERVER,
-                    false,
-                    key_path,
-                )
-                .await?);
+                result =
+                    Ok(
+                        start_and_verify(&ssh_config, configure_ports, VerifyLabels::SERVER, false)
+                            .await?,
+                    );
                 resolved_public_ports = Some(configure_ports);
             }
         }

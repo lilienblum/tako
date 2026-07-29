@@ -1,3 +1,5 @@
+use crate::ssh::{SshClient, SshConfig};
+
 pub(super) struct WizardConnectionResult {
     pub(super) target: crate::config::ServerTarget,
     pub(super) version: Option<String>,
@@ -6,19 +8,28 @@ pub(super) struct WizardConnectionResult {
     pub(super) public_ports: Option<super::ServerPublicPorts>,
 }
 
-pub(super) async fn check_tako_connection(
-    host: &str,
-    port: u16,
-    key_path: Option<&std::path::Path>,
-) -> Result<WizardConnectionResult, String> {
-    use crate::ssh::{SshClient, SshConfig};
-
-    let ssh_config = SshConfig::from_server(host, port).with_key_path(key_path.map(Into::into));
+/// Connect, run `task`, and always disconnect, surfacing whichever error came first.
+async fn with_ssh<T>(
+    ssh_config: SshConfig,
+    task: impl AsyncFnOnce(&SshClient) -> Result<T, String>,
+) -> Result<T, String> {
     let mut ssh = SshClient::new(ssh_config);
     ssh.connect().await.map_err(|e| e.to_string())?;
 
-    let result = async {
-        let target = detect_server_target(&ssh)
+    let result = task(&ssh).await;
+    let disconnect = ssh.disconnect().await.map_err(|e| e.to_string());
+    match (result, disconnect) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Ok(_), Err(error)) => Err(error),
+        (Err(error), _) => Err(error),
+    }
+}
+
+pub(super) async fn check_tako_connection(
+    ssh_config: &SshConfig,
+) -> Result<WizardConnectionResult, String> {
+    with_ssh(ssh_config.clone(), async |ssh| {
+        let target = detect_server_target(ssh)
             .await
             .map_err(|e| format!("Target detection failed: {e}"))?;
         tracing::debug!("Detected target: {}", target.label());
@@ -51,68 +62,37 @@ pub(super) async fn check_tako_connection(
             server_name,
             public_ports,
         })
-    }
-    .await;
-
-    let disconnect = ssh.disconnect().await.map_err(|e| e.to_string());
-    match (result, disconnect) {
-        (Ok(info), Ok(())) => Ok(info),
-        (Ok(_), Err(error)) => Err(error),
-        (Err(error), _) => Err(error),
-    }
+    })
+    .await
 }
 
 pub(super) async fn install_tako_server_with_admin(
-    host: &str,
-    port: u16,
+    ssh_config: &SshConfig,
     admin_user: &str,
     public_ports: Option<super::ServerPublicPorts>,
     mode: crate::ssh::InstallServerMode,
-    key_path: Option<&std::path::Path>,
 ) -> Result<(), String> {
-    use crate::ssh::{SshClient, SshConfig};
-
-    let ssh_config = SshConfig::for_user(host, port, admin_user).with_key_path(key_path);
-    let mut ssh = SshClient::new(ssh_config);
-    ssh.connect().await.map_err(|e| e.to_string())?;
-
-    let result = ssh
-        .install_tako_server(public_ports.map(Into::into), mode)
-        .await
-        .map_err(|e| format!("Install failed: {e}"));
-    let disconnect = ssh.disconnect().await.map_err(|e| e.to_string());
-    match (result, disconnect) {
-        (Ok(()), Ok(())) => Ok(()),
-        (Ok(()), Err(error)) => Err(error),
-        (Err(error), _) => Err(error),
-    }
+    with_ssh(ssh_config.as_user(admin_user), async |ssh| {
+        ssh.install_tako_server(public_ports.map(Into::into), mode)
+            .await
+            .map_err(|e| format!("Install failed: {e}"))
+    })
+    .await
 }
 
 pub(super) async fn configure_tako_server_with_service_user(
-    host: &str,
-    port: u16,
+    ssh_config: &SshConfig,
     public_ports: Option<super::ServerPublicPorts>,
-    key_path: Option<&std::path::Path>,
 ) -> Result<(), String> {
-    use crate::ssh::{SshClient, SshConfig};
-
-    let ssh_config = SshConfig::from_server(host, port).with_key_path(key_path.map(Into::into));
-    let mut ssh = SshClient::new(ssh_config);
-    ssh.connect().await.map_err(|e| e.to_string())?;
-
-    let result = ssh
-        .install_tako_server(
+    with_ssh(ssh_config.clone(), async |ssh| {
+        ssh.install_tako_server(
             public_ports.map(Into::into),
             crate::ssh::InstallServerMode::ConfigureAndStart,
         )
         .await
-        .map_err(|e| format!("Configure failed: {e}"));
-    let disconnect = ssh.disconnect().await.map_err(|e| e.to_string());
-    match (result, disconnect) {
-        (Ok(()), Ok(())) => Ok(()),
-        (Ok(()), Err(error)) => Err(error),
-        (Err(error), _) => Err(error),
-    }
+        .map_err(|e| format!("Configure failed: {e}"))
+    })
+    .await
 }
 
 pub(super) async fn verify_remote_management(

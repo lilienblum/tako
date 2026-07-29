@@ -83,8 +83,16 @@ impl SshConfig {
     /// Set the explicit private key to authenticate with (`~` is expanded here,
     /// so `key_path` is always directly usable).
     pub fn with_key_path(mut self, key_path: Option<&Path>) -> Self {
-        self.key_path = key_path.map(|path| super::expand_tilde(path));
+        self.key_path = key_path.map(super::expand_tilde);
         self
+    }
+
+    /// Same target and key, different SSH user.
+    pub fn as_user(&self, user: &str) -> Self {
+        Self {
+            user: user.to_string(),
+            ..self.clone()
+        }
     }
 
     /// Get the SSH keys directory

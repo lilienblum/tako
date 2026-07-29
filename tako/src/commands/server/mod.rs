@@ -133,15 +133,15 @@ async fn run_async(cmd: ServerCommands) -> Result<(), Box<dyn std::error::Error>
                 .await?;
                 Ok(())
             } else {
-                let _ = wizard::run_add_server_wizard(
-                    name.as_deref(),
-                    description.as_deref(),
+                let _ = wizard::run_add_server_wizard(wizard::WizardDefaults {
+                    name: name.as_deref(),
+                    description: description.as_deref(),
                     port,
                     public_ports,
-                    !no_test,
-                    admin_user.as_deref(),
-                    ssh_key.as_deref(),
-                )
+                    test_ssh: !no_test,
+                    admin_user: admin_user.as_deref(),
+                    key_path: ssh_key.as_deref(),
+                })
                 .await?;
                 Ok(())
             }
