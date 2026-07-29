@@ -26,6 +26,10 @@ pub enum ServerCommands {
         #[arg(long, default_value_t = 22)]
         port: u16,
 
+        /// SSH private key to connect with (defaults to ~/.ssh keys and ssh-agent)
+        #[arg(long, value_name = "PATH")]
+        ssh_key: Option<std::path::PathBuf>,
+
         /// Public HTTP port used by tako-server installs
         #[arg(long)]
         http_port: Option<u16>,
@@ -97,6 +101,7 @@ async fn run_async(cmd: ServerCommands) -> Result<(), Box<dyn std::error::Error>
             name,
             description,
             port,
+            ssh_key,
             http_port,
             https_port,
             install,
@@ -115,6 +120,7 @@ async fn run_async(cmd: ServerCommands) -> Result<(), Box<dyn std::error::Error>
                         name: name.as_deref(),
                         description: description.as_deref(),
                         port,
+                        key_path: ssh_key.as_deref(),
                         public_ports,
                         no_test,
                         pre_detected_target: None,
@@ -133,8 +139,8 @@ async fn run_async(cmd: ServerCommands) -> Result<(), Box<dyn std::error::Error>
                     port,
                     public_ports,
                     !no_test,
-                    !no_test,
                     admin_user.as_deref(),
+                    ssh_key.as_deref(),
                 )
                 .await?;
                 Ok(())

@@ -51,6 +51,82 @@ description = "Primary production server"
 }
 
 #[test]
+fn test_parse_server_key_path() {
+    let toml = r#"
+[[servers]]
+name = "la"
+host = "1.2.3.4"
+key_path = "~/.ssh/deploy_key"
+"#;
+    let config = ServersToml::parse(toml).unwrap();
+    let server = config.get("la").unwrap();
+    assert_eq!(
+        server.key_path.as_deref(),
+        Some(std::path::Path::new("~/.ssh/deploy_key"))
+    );
+}
+
+#[test]
+fn test_parse_server_without_key_path_defaults_to_none() {
+    let toml = r#"
+[[servers]]
+name = "la"
+host = "1.2.3.4"
+"#;
+    let config = ServersToml::parse(toml).unwrap();
+    assert_eq!(config.get("la").unwrap().key_path, None);
+}
+
+#[test]
+fn test_parse_rejects_non_string_key_path() {
+    let toml = r#"
+[[servers]]
+name = "la"
+host = "1.2.3.4"
+key_path = 42
+"#;
+    assert!(ServersToml::parse(toml).is_err());
+}
+
+#[test]
+fn test_save_and_load_key_path() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("config.toml");
+
+    let mut config = ServersToml::default();
+    config
+        .add(
+            "la".to_string(),
+            ServerEntry {
+                host: "1.2.3.4".to_string(),
+                key_path: Some(PathBuf::from("~/.ssh/deploy_key")),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    config
+        .add(
+            "ny".to_string(),
+            ServerEntry {
+                host: "5.6.7.8".to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    config.save_to_file(&path).unwrap();
+
+    let saved = std::fs::read_to_string(&path).unwrap();
+    assert!(saved.contains("key_path = \"~/.ssh/deploy_key\""));
+
+    let loaded = ServersToml::load_from_file(&path).unwrap();
+    assert_eq!(
+        loaded.get("la").unwrap().key_path.as_deref(),
+        Some(std::path::Path::new("~/.ssh/deploy_key"))
+    );
+    assert_eq!(loaded.get("ny").unwrap().key_path, None);
+}
+
+#[test]
 fn test_parse_multiple_servers() {
     let toml = r#"
 [[servers]]
@@ -440,6 +516,7 @@ fn test_update_server() {
                 http_port: 80,
                 https_port: 443,
                 description: None,
+                key_path: None,
             },
         )
         .unwrap();
@@ -453,6 +530,7 @@ fn test_update_server() {
                 http_port: 8080,
                 https_port: 8443,
                 description: None,
+                key_path: None,
             },
         )
         .unwrap();
@@ -499,6 +577,7 @@ fn test_save_and_load() {
                 http_port: 8080,
                 https_port: 8443,
                 description: Some("west coast".to_string()),
+                key_path: None,
             },
         )
         .unwrap();

@@ -556,7 +556,7 @@ async fn upgrade_one_server(
         tree.mark_step_running(name, Step::VersionCheck);
     }
 
-    let mut ssh = match SshClient::connect_to(&server.host, server.port).await {
+    let mut ssh = match SshClient::connect_to(server).await {
         Ok(ssh) => ssh,
         Err(e) => {
             let msg = e.to_string();

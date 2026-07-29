@@ -30,6 +30,91 @@ fn ssh_auth_sock_test_lock() -> &'static tokio::sync::Mutex<()> {
     LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
 }
 
+/// Test SSH server that accepts exactly one public key.
+#[cfg(unix)]
+#[derive(Clone)]
+struct KeyAuthTestServer {
+    allowed_key: russh::keys::PublicKey,
+}
+
+#[cfg(unix)]
+impl russh::server::Server for KeyAuthTestServer {
+    type Handler = Self;
+
+    fn new_client(&mut self, _: Option<std::net::SocketAddr>) -> Self::Handler {
+        self.clone()
+    }
+}
+
+#[cfg(unix)]
+impl russh::server::Handler for KeyAuthTestServer {
+    type Error = russh::Error;
+
+    fn auth_publickey(
+        &mut self,
+        _user: &str,
+        key: &russh::keys::PublicKey,
+    ) -> impl Future<Output = Result<russh::server::Auth, Self::Error>> + Send {
+        let accepted = key.key_data() == self.allowed_key.key_data();
+        async move {
+            if accepted {
+                Ok(russh::server::Auth::Accept)
+            } else {
+                Ok(russh::server::Auth::reject())
+            }
+        }
+    }
+
+    fn channel_open_session(
+        &mut self,
+        channel: russh::Channel<russh::server::Msg>,
+        reply: russh::server::ChannelOpenHandle,
+        _session: &mut russh::server::Session,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        // No commands run in these tests; just allow opening.
+        let _ = channel.id();
+        async {
+            reply.accept().await;
+            Ok(())
+        }
+    }
+}
+
+/// Start a local SSH server accepting only `allowed_key`. Returns the port,
+/// host public key, and server task; `None` when localhost cannot be bound.
+#[cfg(unix)]
+async fn spawn_key_auth_server(
+    allowed_key: russh::keys::PublicKey,
+) -> Option<(u16, russh::keys::PublicKey, tokio::task::JoinHandle<()>)> {
+    use russh::keys::{Algorithm, PrivateKey};
+    use russh::server::Server as _;
+    use std::sync::Arc;
+
+    let host_key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).expect("host key");
+    let host_public_key = host_key.public_key().clone();
+
+    let server_config = Arc::new(russh::server::Config {
+        auth_rejection_time: Duration::from_millis(0),
+        auth_rejection_time_initial: Some(Duration::from_millis(0)),
+        inactivity_timeout: Some(Duration::from_secs(5)),
+        keys: vec![host_key],
+        ..Default::default()
+    });
+
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.ok()?;
+    let port = listener.local_addr().expect("local addr").port();
+
+    let mut server = KeyAuthTestServer { allowed_key };
+    let server_task = tokio::spawn(async move {
+        server
+            .run_on_socket(server_config, &listener)
+            .await
+            .expect("server failed");
+    });
+
+    Some((port, host_public_key, server_task))
+}
+
 #[test]
 fn test_ssh_config_creation() {
     let config = SshConfig::from_server("example.com", 22);
@@ -332,10 +417,6 @@ async fn connect_to_unreachable_host_fails_quickly() {
 #[tokio::test]
 #[cfg(unix)]
 async fn encrypted_keyfile_authenticates_with_configured_passphrase() {
-    use russh::Channel;
-    use russh::keys::{Algorithm, PrivateKey};
-    use russh::server::{Server as _, Session};
-    use std::sync::Arc;
     use tempfile::TempDir;
 
     if !can_bind_localhost() {
@@ -356,67 +437,10 @@ async fn encrypted_keyfile_authenticates_with_configured_passphrase() {
     let client_key = load_secret_key(&key_path, Some("testpass")).expect("load encrypted key");
     let allowed_key = client_key.public_key().clone();
 
-    #[derive(Clone)]
-    struct TestServer {
-        allowed_key: russh::keys::PublicKey,
-    }
-
-    impl russh::server::Server for TestServer {
-        type Handler = Self;
-
-        fn new_client(&mut self, _: Option<std::net::SocketAddr>) -> Self::Handler {
-            self.clone()
-        }
-    }
-
-    impl russh::server::Handler for TestServer {
-        type Error = russh::Error;
-
-        fn auth_publickey(
-            &mut self,
-            _user: &str,
-            key: &russh::keys::PublicKey,
-        ) -> impl Future<Output = Result<russh::server::Auth, Self::Error>> + Send {
-            let accepted = key.key_data() == self.allowed_key.key_data();
-            async move {
-                if accepted {
-                    Ok(russh::server::Auth::Accept)
-                } else {
-                    Ok(russh::server::Auth::reject())
-                }
-            }
-        }
-
-        fn channel_open_session(
-            &mut self,
-            channel: Channel<russh::server::Msg>,
-            reply: russh::server::ChannelOpenHandle,
-            _session: &mut Session,
-        ) -> impl Future<Output = Result<(), Self::Error>> + Send {
-            let _ = channel.id();
-            async {
-                reply.accept().await;
-                Ok(())
-            }
-        }
-    }
-
-    let host_key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).expect("host key");
-    let host_public_key = host_key.public_key().clone();
-
-    let server_config = russh::server::Config {
-        auth_rejection_time: Duration::from_millis(0),
-        auth_rejection_time_initial: Some(Duration::from_millis(0)),
-        inactivity_timeout: Some(Duration::from_secs(5)),
-        keys: vec![host_key],
-        ..Default::default()
-    };
-    let server_config = Arc::new(server_config);
-
-    let Ok(listener) = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await else {
+    let Some((port, host_public_key, server_task)) = spawn_key_auth_server(allowed_key).await
+    else {
         return;
     };
-    let port = listener.local_addr().expect("local addr").port();
     let known_hosts_path = keys_dir.path().join("known_hosts");
     russh::keys::known_hosts::learn_known_hosts_path(
         "127.0.0.1",
@@ -425,14 +449,6 @@ async fn encrypted_keyfile_authenticates_with_configured_passphrase() {
         &known_hosts_path,
     )
     .expect("write known_hosts entry");
-
-    let mut server = TestServer { allowed_key };
-    let server_task = tokio::spawn(async move {
-        server
-            .run_on_socket(server_config, &listener)
-            .await
-            .expect("server failed");
-    });
 
     let _ssh_auth_sock_guard = ssh_auth_sock_test_lock().lock().await;
     let prev_sock = std::env::var("SSH_AUTH_SOCK").ok();
@@ -462,62 +478,13 @@ async fn encrypted_keyfile_authenticates_with_configured_passphrase() {
 #[tokio::test]
 #[cfg(unix)]
 async fn ssh_agent_authenticates_when_no_key_files_exist() {
-    use russh::Channel;
     use russh::keys::agent::client::AgentClient;
     use russh::keys::{Algorithm, PrivateKey};
-    use russh::server::{Server as _, Session};
     use std::process::Stdio;
-    use std::sync::Arc;
     use tempfile::TempDir;
 
     if !can_bind_localhost() || !can_bind_unix_socket() {
         return;
-    }
-
-    #[derive(Clone)]
-    struct TestServer {
-        allowed_key: russh::keys::PublicKey,
-    }
-
-    impl russh::server::Server for TestServer {
-        type Handler = Self;
-
-        fn new_client(&mut self, _: Option<std::net::SocketAddr>) -> Self::Handler {
-            self.clone()
-        }
-    }
-
-    impl russh::server::Handler for TestServer {
-        type Error = russh::Error;
-
-        fn auth_publickey(
-            &mut self,
-            _user: &str,
-            key: &russh::keys::PublicKey,
-        ) -> impl Future<Output = Result<russh::server::Auth, Self::Error>> + Send {
-            let accepted = key.key_data() == self.allowed_key.key_data();
-            async move {
-                if accepted {
-                    Ok(russh::server::Auth::Accept)
-                } else {
-                    Ok(russh::server::Auth::reject())
-                }
-            }
-        }
-
-        fn channel_open_session(
-            &mut self,
-            channel: Channel<russh::server::Msg>,
-            reply: russh::server::ChannelOpenHandle,
-            _session: &mut Session,
-        ) -> impl Future<Output = Result<(), Self::Error>> + Send {
-            // We don't need to run any commands for this test; just allow opening.
-            let _ = channel.id();
-            async {
-                reply.accept().await;
-                Ok(())
-            }
-        }
     }
 
     // Start a private ssh-agent with a temporary socket (daemonized by ssh-agent).
@@ -564,19 +531,7 @@ async fn ssh_agent_authenticates_when_no_key_files_exist() {
     unsafe { std::env::set_var("SSH_AUTH_SOCK", &agent_path) };
 
     // Start an SSH server that accepts only the agent-loaded public key.
-    let host_key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).expect("host key");
-    let host_public_key = host_key.public_key().clone();
-
-    let server_config = russh::server::Config {
-        auth_rejection_time: Duration::from_millis(0),
-        auth_rejection_time_initial: Some(Duration::from_millis(0)),
-        inactivity_timeout: Some(Duration::from_secs(5)),
-        keys: vec![host_key],
-        ..Default::default()
-    };
-    let server_config = Arc::new(server_config);
-
-    let Ok(listener) = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await else {
+    let Some((port, host_public_key, server_task)) = spawn_key_auth_server(client_pub).await else {
         let _ = tokio::process::Command::new("kill")
             .arg(pid.to_string())
             .stdout(Stdio::null())
@@ -585,18 +540,6 @@ async fn ssh_agent_authenticates_when_no_key_files_exist() {
             .await;
         return;
     };
-    let port = listener.local_addr().expect("local addr").port();
-
-    let mut server = TestServer {
-        allowed_key: client_pub,
-    };
-
-    let server_task = tokio::spawn(async move {
-        server
-            .run_on_socket(server_config, &listener)
-            .await
-            .expect("server failed");
-    });
 
     // Ensure we don't find any key files on disk.
     let keys_dir = TempDir::new().expect("temp keys dir");
@@ -635,4 +578,110 @@ async fn ssh_agent_authenticates_when_no_key_files_exist() {
         // SAFETY: see note above.
         unsafe { std::env::remove_var("SSH_AUTH_SOCK") };
     }
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn explicit_key_path_is_used_exclusively() {
+    use russh::keys::{Algorithm, PrivateKey, ssh_key::LineEnding};
+    use std::os::unix::fs::PermissionsExt;
+    use tempfile::TempDir;
+
+    if !can_bind_localhost() {
+        return;
+    }
+
+    let write_key = |path: &std::path::Path, key: &PrivateKey| {
+        std::fs::write(path, key.to_openssh(LineEnding::LF).expect("serialize key"))
+            .expect("write key file");
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .expect("chmod key file");
+    };
+
+    let accepted_key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).expect("key");
+    let rejected_key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).expect("key");
+
+    let key_dir = TempDir::new().expect("temp key dir");
+    let accepted_path = key_dir.path().join("deploy_key");
+    let rejected_path = key_dir.path().join("other_key");
+    write_key(&accepted_path, &accepted_key);
+    write_key(&rejected_path, &rejected_key);
+
+    let Some((port, host_public_key, server_task)) =
+        spawn_key_auth_server(accepted_key.public_key().clone()).await
+    else {
+        return;
+    };
+
+    let _ssh_auth_sock_guard = ssh_auth_sock_test_lock().lock().await;
+    let prev_sock = std::env::var("SSH_AUTH_SOCK").ok();
+    // Ensure we don't accidentally use an agent in this test.
+    unsafe { std::env::remove_var("SSH_AUTH_SOCK") };
+
+    let config_with_key = |keys_dir: &TempDir, key_path: &std::path::Path| {
+        russh::keys::known_hosts::learn_known_hosts_path(
+            "127.0.0.1",
+            port,
+            &host_public_key,
+            keys_dir.path().join("known_hosts"),
+        )
+        .expect("write known_hosts entry");
+        let mut config = SshConfig::from_server("127.0.0.1", port).with_key_path(Some(key_path));
+        config.timeout = Duration::from_secs(5);
+        config.keys_dir = Some(keys_dir.path().to_path_buf());
+        config
+    };
+
+    // Explicit key at a non-default path authenticates with no default keys on disk.
+    let empty_keys_dir = TempDir::new().expect("temp keys dir");
+    let mut ssh = SshClient::new(config_with_key(&empty_keys_dir, &accepted_path));
+    tokio::time::timeout(Duration::from_secs(10), ssh.connect())
+        .await
+        .expect("connect timed out")
+        .expect("explicit key auth should work");
+    ssh.disconnect().await.expect("disconnect");
+
+    // A rejected explicit key fails even when the default key would be accepted.
+    let default_keys_dir = TempDir::new().expect("temp keys dir");
+    write_key(&default_keys_dir.path().join("id_ed25519"), &accepted_key);
+    let mut ssh = SshClient::new(config_with_key(&default_keys_dir, &rejected_path));
+    let err = tokio::time::timeout(Duration::from_secs(10), ssh.connect())
+        .await
+        .expect("connect timed out")
+        .expect_err("rejected explicit key must not fall back to default keys");
+    assert!(matches!(err, SshError::Authentication(_)), "got: {err}");
+
+    // A missing explicit key file fails fast with a key load error.
+    let missing_path = key_dir.path().join("missing_key");
+    let mut ssh = SshClient::new(config_with_key(&empty_keys_dir, &missing_path));
+    let err = tokio::time::timeout(Duration::from_secs(10), ssh.connect())
+        .await
+        .expect("connect timed out")
+        .expect_err("missing explicit key must fail");
+    assert!(matches!(err, SshError::KeyLoad { .. }), "got: {err}");
+
+    // Cleanup.
+    server_task.abort();
+    match prev_sock {
+        Some(v) => unsafe { std::env::set_var("SSH_AUTH_SOCK", v) },
+        None => unsafe { std::env::remove_var("SSH_AUTH_SOCK") },
+    }
+}
+
+#[test]
+fn expand_tilde_resolves_home_prefix() {
+    let home = dirs::home_dir().expect("home dir");
+    assert_eq!(
+        crate::ssh::expand_tilde(std::path::Path::new("~/.ssh/deploy_key")),
+        home.join(".ssh/deploy_key")
+    );
+    assert_eq!(crate::ssh::expand_tilde(std::path::Path::new("~")), home);
+    assert_eq!(
+        crate::ssh::expand_tilde(std::path::Path::new("/abs/key")),
+        std::path::PathBuf::from("/abs/key")
+    );
+    assert_eq!(
+        crate::ssh::expand_tilde(std::path::Path::new("relative/key")),
+        std::path::PathBuf::from("relative/key")
+    );
 }

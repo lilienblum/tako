@@ -7,15 +7,27 @@ use super::*;
 
 impl SshClient {
     pub(super) async fn authenticate(&mut self, handle: &mut Handle<SshHandler>) -> SshResult<()> {
-        let keys_dir = self.config.keys_directory();
+        // An explicit key is used exclusively — no default-key or agent fallback,
+        // so a misconfigured key surfaces instead of silently authenticating.
+        if let Some(key_path) = self.config.key_path.clone() {
+            return match self.try_key_auth(handle, &key_path).await? {
+                Some(public_key) => {
+                    self.authenticated_public_key = Some(public_key);
+                    Ok(())
+                }
+                None => Err(SshError::Authentication(format!(
+                    "SSH key {} was not accepted by the server",
+                    key_path.display()
+                ))),
+            };
+        }
 
-        // id_dsa is obsolete (OpenSSH dropped support in 7.0) — don't try it.
-        let key_names = ["id_ed25519", "id_rsa", "id_ecdsa"];
+        let keys_dir = self.config.keys_directory();
 
         let mut last_error = None;
         let mut found_any_key_file = false;
 
-        for key_name in &key_names {
+        for key_name in crate::ssh::DEFAULT_KEY_NAMES {
             let key_path = keys_dir.join(key_name);
 
             if !key_path.exists() {

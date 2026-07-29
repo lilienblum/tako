@@ -35,7 +35,7 @@ pub async fn implode_server(
         }
     }
 
-    let ssh = SshClient::connect_to(&server.host, server.port).await?;
+    let ssh = SshClient::connect_to(server).await?;
 
     let script = build_server_implode_script();
     let cmd = SshClient::run_with_root_or_sudo(&script);

@@ -154,6 +154,14 @@ pub(super) async fn list_servers() -> Result<(), Box<dyn std::error::Error>> {
             output::bullet(&format!("{} {desc}", output::theme_muted("Description")));
         }
 
+        if let Some(key_path) = &entry.key_path {
+            output::bullet(&format!(
+                "{} {}",
+                output::theme_muted("SSH key"),
+                key_path.display()
+            ));
+        }
+
         if entry.http_port != 80 || entry.https_port != 443 {
             output::bullet(&format!(
                 "{} HTTP {}, HTTPS {}",
@@ -180,7 +188,7 @@ pub(super) async fn restart_server(
         .ok_or_else(|| format!("Server '{}' not found.", name))?;
 
     let _scope = output::scope(name).entered();
-    let ssh_config = SshConfig::from_server(&server.host, server.port);
+    let ssh_config = SshConfig::from_entry(server);
     let mut ssh = SshClient::new(ssh_config);
     let _t = output::timed("SSH connected");
     output::with_spinner_async(&format!("Connecting to {name}"), "Connected", ssh.connect())

@@ -7,7 +7,7 @@
 mod client;
 mod error;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 static KEY_PASSPHRASE: Mutex<Option<String>> = Mutex::new(None);
@@ -50,14 +50,42 @@ pub(crate) fn default_key_needs_passphrase() -> bool {
         return false;
     };
 
-    ["id_ed25519", "id_rsa", "id_ecdsa"]
+    DEFAULT_KEY_NAMES
+        .iter()
+        .any(|name| key_needs_passphrase(&keys_dir.join(name)))
+}
+
+// id_dsa is obsolete (OpenSSH dropped support in 7.0) — don't try it.
+pub(crate) const DEFAULT_KEY_NAMES: [&str; 3] = ["id_ed25519", "id_rsa", "id_ecdsa"];
+
+/// First existing default private key (`~/.ssh/id_ed25519` etc.), if any.
+pub(crate) fn default_key_path() -> Option<PathBuf> {
+    let keys_dir = dirs::home_dir()?.join(".ssh");
+    DEFAULT_KEY_NAMES
         .iter()
         .map(|name| keys_dir.join(name))
-        .any(|path| {
-            path.exists()
-                && matches!(
-                    russh::keys::load_secret_key(path, None),
-                    Err(russh::keys::Error::KeyIsEncrypted)
-                )
-        })
+        .find(|path| path.exists())
+}
+
+pub(crate) fn key_needs_passphrase(path: &Path) -> bool {
+    let path = expand_tilde(path);
+    path.exists()
+        && matches!(
+            russh::keys::load_secret_key(path, None),
+            Err(russh::keys::Error::KeyIsEncrypted)
+        )
+}
+
+/// Expand a leading `~` to the user's home directory.
+pub(crate) fn expand_tilde(path: &Path) -> PathBuf {
+    let Some(home) = dirs::home_dir() else {
+        return path.to_path_buf();
+    };
+    if path == Path::new("~") {
+        return home;
+    }
+    match path.strip_prefix("~") {
+        Ok(rest) => home.join(rest),
+        Err(_) => path.to_path_buf(),
+    }
 }

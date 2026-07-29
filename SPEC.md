@@ -291,6 +291,7 @@ Detected server build target metadata (`arch`, `libc`) and public proxy ports (`
 **SSH authentication:**
 
 - `tako` authenticates using local SSH keys from `~/.ssh` (common filenames like `id_ed25519`, `id_rsa`, etc.).
+- A `[[servers]]` entry can pin a specific private key with `key_path` (set via `tako servers add --ssh-key {path}` or the add-server wizard). When set, connections to that server use only that key — default keys and `ssh-agent` are not tried. A leading `~` is expanded.
 - If a key file is passphrase-protected, `tako` will prompt for the passphrase when running interactively. Pass `--ssh-passphrase {passphrase}` for one-line commands and non-interactive runs.
 - If no suitable key files are found or usable, `tako` falls back to `ssh-agent` via `SSH_AUTH_SOCK` (when available).
 
@@ -907,18 +908,19 @@ Logs flow helpers:
 
 - For `production`, if no servers are configured and the terminal is interactive, logs offers to run the add-server wizard.
 
-### tako servers add [host|admin-user@host] [--name {name}] [--description {text}] [--port {ssh-port}] [--http-port {port}] [--https-port {port}] [--install] [--admin-user {user}]
+### tako servers add [host|admin-user@host] [--name {name}] [--description {text}] [--port {ssh-port}] [--ssh-key {path}] [--http-port {port}] [--https-port {port}] [--install] [--admin-user {user}]
 
 Add server to global `config.toml` (`[[servers]]`).
 
 - With `host`: adds directly from CLI args and defaults the server name to the host's first DNS label (`my-server.tailnet.ts.net` becomes `my-server`). IP addresses and hosts that do not produce a valid server name require `--name`.
 - With `admin-user@host`: treats the prefix as the admin SSH user for install/repair and stores only `host`.
-- Without `host` (interactive terminal): launches a guided wizard (host, SSH port, optional SSH passphrase when a default key is encrypted, HTTP/HTTPS ports when installing or starting a stopped install, required server name, optional description) with a final `Looks good?` confirmation. Choosing `No` restarts the wizard.
+- Without `host` (interactive terminal): launches a guided wizard (host, SSH port, SSH key prefilled with the default `~/.ssh` key, optional SSH passphrase when the chosen key is encrypted, HTTP/HTTPS ports when installing or starting a stopped install, required server name, optional description) with a final `Looks good?` confirmation. Choosing `No` restarts the wizard. The SSH key prompt is skipped when `--ssh-key` is passed.
 - If the derived server name already exists, interactive mode prompts for another name. Non-interactive mode fails and asks for `--name`.
 - The add-server wizard supports `Tab` autocomplete suggestions for host/name/port from existing servers and persisted CLI history.
   - For name/port prompts, suggestions related to the selected host (and selected name for ports) are prioritized first, then global suggestions are shown.
 - Successful adds record host/name/SSH-port history in `history.toml` for future autocomplete.
 - `--description` stores optional human-readable metadata in `config.toml` (shown in `tako servers list`).
+- `--ssh-key` stores the private key path as `key_path` in the server's `[[servers]]` entry (shown in `tako servers list`). All later SSH connections to that server use only this key. The file must exist; `tako servers add` fails otherwise.
 - `--http-port` and `--https-port` set the public proxy ports used when `servers add` installs `tako-server`; omitted values default to `80` and `443`. They are distinct from `--port`, which remains the SSH port.
 - Re-running with the same name/host/SSH-port/public-port tuple is idempotent (reports already configured and succeeds).
 

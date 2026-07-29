@@ -9,10 +9,11 @@ pub(super) struct WizardConnectionResult {
 pub(super) async fn check_tako_connection(
     host: &str,
     port: u16,
+    key_path: Option<&std::path::Path>,
 ) -> Result<WizardConnectionResult, String> {
     use crate::ssh::{SshClient, SshConfig};
 
-    let ssh_config = SshConfig::from_server(host, port);
+    let ssh_config = SshConfig::from_server(host, port).with_key_path(key_path.map(Into::into));
     let mut ssh = SshClient::new(ssh_config);
     ssh.connect().await.map_err(|e| e.to_string())?;
 
@@ -67,10 +68,11 @@ pub(super) async fn install_tako_server_with_admin(
     admin_user: &str,
     public_ports: Option<super::ServerPublicPorts>,
     mode: crate::ssh::InstallServerMode,
+    key_path: Option<&std::path::Path>,
 ) -> Result<(), String> {
     use crate::ssh::{SshClient, SshConfig};
 
-    let ssh_config = SshConfig::for_user(host, port, admin_user);
+    let ssh_config = SshConfig::for_user(host, port, admin_user).with_key_path(key_path);
     let mut ssh = SshClient::new(ssh_config);
     ssh.connect().await.map_err(|e| e.to_string())?;
 
@@ -90,10 +92,11 @@ pub(super) async fn configure_tako_server_with_service_user(
     host: &str,
     port: u16,
     public_ports: Option<super::ServerPublicPorts>,
+    key_path: Option<&std::path::Path>,
 ) -> Result<(), String> {
     use crate::ssh::{SshClient, SshConfig};
 
-    let ssh_config = SshConfig::from_server(host, port);
+    let ssh_config = SshConfig::from_server(host, port).with_key_path(key_path.map(Into::into));
     let mut ssh = SshClient::new(ssh_config);
     ssh.connect().await.map_err(|e| e.to_string())?;
 

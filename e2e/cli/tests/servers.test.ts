@@ -71,6 +71,9 @@ describe("server add wizard", () => {
     await term.waitForText("SSH port", { timeout: 5000 });
     term.press("\r");
 
+    await term.waitForText("SSH key", { timeout: 5000 });
+    term.press("\r");
+
     await term.waitForText("Server name", { timeout: 5000 });
     term.write("prod\r");
 

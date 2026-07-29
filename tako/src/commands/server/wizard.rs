@@ -1,4 +1,5 @@
 use crate::output;
+use std::path::{Path, PathBuf};
 use tracing::Instrument;
 
 mod connection;
@@ -37,13 +38,14 @@ pub async fn prompt_to_add_server(
         return Ok(None);
     }
 
-    run_add_server_wizard(None, None, 22, None, true, true, None).await
+    run_add_server_wizard(None, None, 22, None, true, None, None).await
 }
 
 pub struct AddServerOptions<'a> {
     pub name: Option<&'a str>,
     pub description: Option<&'a str>,
     pub port: u16,
+    pub key_path: Option<&'a Path>,
     pub public_ports: Option<ServerPublicPorts>,
     pub no_test: bool,
     pub pre_detected_target: Option<crate::config::ServerTarget>,
@@ -58,9 +60,9 @@ pub(super) async fn run_add_server_wizard(
     initial_description: Option<&str>,
     initial_port: u16,
     initial_public_ports: Option<ServerPublicPorts>,
-    default_test_ssh: bool,
-    allow_install: bool,
+    test_ssh: bool,
     admin_user_default: Option<&str>,
+    initial_key_path: Option<&Path>,
 ) -> Result<Option<String>, Box<dyn std::error::Error>> {
     use crate::config::{CliHistoryToml, ServersToml};
 
@@ -110,11 +112,16 @@ pub(super) async fn run_add_server_wizard(
         .cloned();
 
     // --- Wizard 1: Connection details ---
-    let mut conn_wizard =
-        output::Wizard::new().with_fields(&[("Server IP or hostname", false), ("SSH port", false)]);
+    let prompt_key = initial_key_path.is_none();
+    let mut conn_fields = vec![("Server IP or hostname", false), ("SSH port", false)];
+    if prompt_key {
+        conn_fields.push(("SSH key", false));
+    }
+    let mut conn_wizard = output::Wizard::new().with_fields(&conn_fields);
     let mut step = 0usize;
     let mut host = String::new();
     let mut port: u16 = initial_port;
+    let mut key_path: Option<PathBuf> = initial_key_path.map(Into::into);
 
     loop {
         match step {
@@ -162,7 +169,11 @@ pub(super) async fn run_add_server_wizard(
                     Ok(v) => match v.trim().parse::<u16>() {
                         Ok(p) => {
                             port = p;
-                            break;
+                            if prompt_key {
+                                step = 2;
+                            } else {
+                                break;
+                            }
                         }
                         Err(_) => {
                             output::warning(&format!("Invalid SSH port '{}'", v.trim()));
@@ -173,12 +184,40 @@ pub(super) async fn run_add_server_wizard(
                     Err(e) => return Err(e.into()),
                 }
             }
+            2 => {
+                let default_key = crate::ssh::default_key_path().map(|p| p.display().to_string());
+                match conn_wizard.text_field(
+                    output::TextField::new("SSH key")
+                        .optional()
+                        .default_opt(default_key.as_deref()),
+                ) {
+                    Ok(v) => {
+                        let v = v.trim();
+                        if v.is_empty() {
+                            key_path = None;
+                            break;
+                        }
+                        let candidate = PathBuf::from(v);
+                        if crate::ssh::expand_tilde(&candidate).exists() {
+                            key_path = Some(candidate);
+                            break;
+                        }
+                        output::warning(&format!("SSH key not found: {v}"));
+                        conn_wizard.undo_last();
+                    }
+                    Err(e) if output::is_wizard_back(&e) => step = 1,
+                    Err(e) => return Err(e.into()),
+                }
+            }
             _ => break,
         }
     }
 
     if crate::ssh::configured_key_passphrase().is_none()
-        && crate::ssh::default_key_needs_passphrase()
+        && match &key_path {
+            Some(path) => crate::ssh::key_needs_passphrase(path),
+            None => crate::ssh::default_key_needs_passphrase(),
+        }
     {
         let passphrase = output::TextField::new("SSH passphrase")
             .password()
@@ -192,14 +231,14 @@ pub(super) async fn run_add_server_wizard(
     let mut detected_target: Option<crate::config::ServerTarget> = None;
     let mut detected_public_ports: Option<ServerPublicPorts> = initial_public_ports;
 
-    if default_test_ssh {
+    if test_ssh {
         let host_span = output::scope(&host);
         let _t = output::timed(&format!("Test SSH connection to {host}:{port}"));
         let mut result: Result<WizardConnectionResult, String> = output::with_spinner_async_err(
             "Connecting",
             "Connection successful",
             "Connection failed",
-            check_tako_connection(&host, port).instrument(host_span),
+            check_tako_connection(&host, port, key_path.as_deref()).instrument(host_span),
         )
         .await;
         drop(_t);
@@ -208,7 +247,7 @@ pub(super) async fn run_add_server_wizard(
             Ok(info) => !info.installed,
             Err(_) => true,
         };
-        if allow_install && needs_install {
+        if needs_install {
             let should_install = output::confirm("Install tako-server now?", true)?;
             if should_install {
                 let public_ports = install_public_ports(initial_public_ports)?;
@@ -222,26 +261,29 @@ pub(super) async fn run_add_server_wizard(
                     public_ports,
                     VerifyLabels::INSTALL,
                     true,
+                    key_path.as_deref(),
                 )
                 .await?);
                 detected_public_ports = Some(public_ports);
             }
         }
 
-        if allow_install
-            && matches!(
-                &result,
-                Ok(info) if info.installed && info.public_ports.is_none()
-            )
-        {
+        if matches!(
+            &result,
+            Ok(info) if info.installed && info.public_ports.is_none()
+        ) {
             let should_start = output::confirm("Start tako-server now?", true)?;
             if should_start {
                 let public_ports = install_public_ports(initial_public_ports)?;
-                result =
-                    Ok(
-                        start_and_verify(&host, port, public_ports, VerifyLabels::SERVER, true)
-                            .await?,
-                    );
+                result = Ok(start_and_verify(
+                    &host,
+                    port,
+                    public_ports,
+                    VerifyLabels::SERVER,
+                    true,
+                    key_path.as_deref(),
+                )
+                .await?);
                 detected_public_ports = Some(public_ports);
             }
         }
@@ -361,6 +403,7 @@ pub(super) async fn run_add_server_wizard(
             name: name_ref,
             description: description_ref,
             port,
+            key_path: key_path.as_deref(),
             public_ports: initial_public_ports,
             no_test: true,
             pre_detected_target: detected_target,
@@ -383,6 +426,7 @@ pub async fn add_server(
         name,
         description,
         port,
+        key_path,
         public_ports,
         no_test,
         pre_detected_target,
@@ -391,6 +435,12 @@ pub async fn add_server(
         allow_install_prompt,
         admin_user,
     } = options;
+
+    if let Some(key_path) = key_path
+        && !crate::ssh::expand_tilde(key_path).exists()
+    {
+        return Err(format!("SSH key not found: {}", key_path.display()).into());
+    }
 
     let mut servers = ServersToml::load()?;
     let normalized_description = description.and_then(|d| {
@@ -443,11 +493,15 @@ pub async fn add_server(
                 && existing.description.as_deref() != normalized_description.as_deref();
             let public_ports_changed = desired_public_ports.http_port != existing.http_port
                 || desired_public_ports.https_port != existing.https_port;
+            let key_path_changed = key_path.is_some() && existing.key_path.as_deref() != key_path;
 
-            if description_changed || public_ports_changed {
+            if description_changed || public_ports_changed || key_path_changed {
                 let desired_description = normalized_description
                     .clone()
                     .or_else(|| existing.description.clone());
+                let desired_key_path = key_path
+                    .map(Path::to_path_buf)
+                    .or_else(|| existing.key_path.clone());
                 servers.update(
                     &existing_name,
                     ServerEntry {
@@ -456,6 +510,7 @@ pub async fn add_server(
                         http_port: desired_public_ports.http_port,
                         https_port: desired_public_ports.https_port,
                         description: desired_description,
+                        key_path: desired_key_path,
                     },
                 )?;
                 servers.save()?;
@@ -527,7 +582,7 @@ pub async fn add_server(
             "Connecting",
             "Connection successful",
             "Connection failed",
-            check_tako_connection(host, port),
+            check_tako_connection(host, port, key_path),
         )
         .await;
 
@@ -545,6 +600,7 @@ pub async fn add_server(
                 install_ports,
                 VerifyLabels::INSTALL,
                 false,
+                key_path,
             )
             .await?);
             resolved_public_ports = Some(install_ports);
@@ -562,6 +618,7 @@ pub async fn add_server(
                     install_ports,
                     VerifyLabels::INSTALL,
                     false,
+                    key_path,
                 )
                 .await?);
                 resolved_public_ports = Some(install_ports);
@@ -582,11 +639,15 @@ pub async fn add_server(
             };
             if should_configure {
                 let configure_ports = install_public_ports(public_ports)?;
-                result =
-                    Ok(
-                        start_and_verify(host, port, configure_ports, VerifyLabels::SERVER, false)
-                            .await?,
-                    );
+                result = Ok(start_and_verify(
+                    host,
+                    port,
+                    configure_ports,
+                    VerifyLabels::SERVER,
+                    false,
+                    key_path,
+                )
+                .await?);
                 resolved_public_ports = Some(configure_ports);
             }
         }
@@ -636,6 +697,7 @@ pub async fn add_server(
         http_port: resolved_public_ports.http_port,
         https_port: resolved_public_ports.https_port,
         description: normalized_description.clone(),
+        key_path: key_path.map(Path::to_path_buf),
     };
 
     servers.add(server_name.clone(), entry)?;

@@ -12,7 +12,7 @@ use russh::Disconnect;
 use russh::client::{self, Config, Handle, Handler};
 use russh::keys::{PublicKey, check_known_hosts_path};
 use std::future::Future;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tako_core::Response;
@@ -32,6 +32,9 @@ pub struct SshConfig {
     pub timeout: Duration,
     /// Path to SSH keys directory (default ~/.ssh)
     pub keys_dir: Option<PathBuf>,
+    /// Explicit private key to authenticate with. When set, default keys and
+    /// the ssh-agent are not tried.
+    pub key_path: Option<PathBuf>,
     /// Passphrase for encrypted local SSH private keys.
     pub key_passphrase: Option<String>,
 }
@@ -44,6 +47,7 @@ impl std::fmt::Debug for SshConfig {
             .field("port", &self.port)
             .field("timeout", &self.timeout)
             .field("keys_dir", &self.keys_dir)
+            .field("key_path", &self.key_path)
             .field(
                 "key_passphrase",
                 &self.key_passphrase.as_ref().map(|_| "<redacted>"),
@@ -58,6 +62,11 @@ impl SshConfig {
         Self::for_user(host, port, "tako")
     }
 
+    /// Create config from a configured server, including its pinned SSH key.
+    pub fn from_entry(entry: &crate::config::ServerEntry) -> Self {
+        Self::from_server(&entry.host, entry.port).with_key_path(entry.key_path.as_deref())
+    }
+
     /// Create config for a specific SSH user.
     pub fn for_user(host: &str, port: u16, user: &str) -> Self {
         Self {
@@ -66,8 +75,16 @@ impl SshConfig {
             port,
             timeout: Duration::from_secs(30),
             keys_dir: None,
+            key_path: None,
             key_passphrase: super::configured_key_passphrase(),
         }
+    }
+
+    /// Set the explicit private key to authenticate with (`~` is expanded here,
+    /// so `key_path` is always directly usable).
+    pub fn with_key_path(mut self, key_path: Option<&Path>) -> Self {
+        self.key_path = key_path.map(|path| super::expand_tilde(path));
+        self
     }
 
     /// Get the SSH keys directory
@@ -174,9 +191,9 @@ impl SshClient {
         }
     }
 
-    /// Create and connect to a server in one step.
-    pub async fn connect_to(host: &str, port: u16) -> SshResult<Self> {
-        let mut client = Self::new(SshConfig::from_server(host, port));
+    /// Create and connect to a configured server in one step.
+    pub async fn connect_to(entry: &crate::config::ServerEntry) -> SshResult<Self> {
+        let mut client = Self::new(SshConfig::from_entry(entry));
         client.connect().await?;
         Ok(client)
     }

@@ -85,6 +85,10 @@ pub struct ServerEntry {
     /// Optional human-readable server description.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+
+    /// Optional path to the SSH private key used to connect (stored as written, `~` allowed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_path: Option<PathBuf>,
 }
 
 fn default_ssh_port() -> u16 {
@@ -107,6 +111,7 @@ impl Default for ServerEntry {
             http_port: default_http_port(),
             https_port: default_https_port(),
             description: None,
+            key_path: None,
         }
     }
 }
@@ -185,26 +190,10 @@ impl ServersToml {
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
 
-                let arch_field = server_value.get("arch");
-                let libc_field = server_value.get("libc");
-                let arch = match arch_field {
-                    Some(value) => Some(value.as_str().ok_or_else(|| {
-                        ConfigError::Validation(format!(
-                            "Server '{}' field 'arch' must be a string",
-                            name
-                        ))
-                    })?),
-                    None => None,
-                };
-                let libc = match libc_field {
-                    Some(value) => Some(value.as_str().ok_or_else(|| {
-                        ConfigError::Validation(format!(
-                            "Server '{}' field 'libc' must be a string",
-                            name
-                        ))
-                    })?),
-                    None => None,
-                };
+                let key_path =
+                    parse_string_field(server_value, name, "key_path")?.map(PathBuf::from);
+                let arch = parse_string_field(server_value, name, "arch")?;
+                let libc = parse_string_field(server_value, name, "libc")?;
 
                 let entry = ServerEntry {
                     host: host.to_string(),
@@ -212,6 +201,7 @@ impl ServersToml {
                     http_port,
                     https_port,
                     description,
+                    key_path,
                 };
 
                 // Check for duplicate names
@@ -371,6 +361,12 @@ impl ServersToml {
                     toml::Value::String(description.clone()),
                 );
             }
+            if let Some(key_path) = &entry.key_path {
+                table.insert(
+                    "key_path".to_string(),
+                    toml::Value::String(key_path.to_string_lossy().into_owned()),
+                );
+            }
             if let Some(target) = self.server_targets.get(name) {
                 table.insert("arch".to_string(), toml::Value::String(target.arch.clone()));
                 table.insert("libc".to_string(), toml::Value::String(target.libc.clone()));
@@ -487,6 +483,22 @@ impl ServersToml {
     /// Check if empty
     pub fn is_empty(&self) -> bool {
         self.servers.is_empty()
+    }
+}
+
+fn parse_string_field<'a>(
+    server_value: &'a toml::Value,
+    server_name: &str,
+    field: &str,
+) -> Result<Option<&'a str>> {
+    match server_value.get(field) {
+        Some(value) => value.as_str().map(Some).ok_or_else(|| {
+            ConfigError::Validation(format!(
+                "Server '{}' field '{}' must be a string",
+                server_name, field
+            ))
+        }),
+        None => Ok(None),
     }
 }
 
