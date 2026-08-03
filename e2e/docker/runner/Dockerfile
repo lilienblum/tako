@@ -16,7 +16,7 @@ RUN curl -fsSL https://bun.sh/install | bash \
   && ln -s "${BUN_INSTALL}/bin/bun" /usr/local/bin/bun
 
 # Node.js + pnpm (for node fixtures)
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
   && apt-get install -y --no-install-recommends nodejs \
   && npm install -g pnpm \
   && rm -rf /var/lib/apt/lists/*
@@ -25,7 +25,7 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 RUN ARCH="$(dpkg --print-architecture)" \
   && curl --fail --show-error --location --retry 5 --retry-all-errors --retry-delay 2 \
     --output /tmp/go.tar.gz \
-    "https://dl.google.com/go/go1.22.10.linux-${ARCH}.tar.gz" \
+    "https://dl.google.com/go/go1.26.5.linux-${ARCH}.tar.gz" \
   && tar -C /usr/local -xzf /tmp/go.tar.gz \
   && rm /tmp/go.tar.gz \
   && ln -s /usr/local/go/bin/go /usr/local/bin/go

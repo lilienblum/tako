@@ -10,20 +10,20 @@
     "deploy": "wrangler deploy"
   },
   "dependencies": {
-    "@astrojs/markdown-remark": "7.2.1",
+    "@astrojs/markdown-remark": "7.2.2",
     "@astrojs/rss": "^4.0.19",
     "@astrojs/sitemap": "^3.7.3",
     "astro": "catalog:dev",
-    "astro-d2": "^0.13.0",
+    "astro-d2": "^0.13.1",
     "lucide-astro": "^0.556.0"
   },
   "devDependencies": {
-    "@astrojs/check": "^0.9.9",
+    "@astrojs/check": "^0.9.10",
     "@resvg/resvg-js": "catalog:",
     "@tsconfig/strictest": "catalog:dev",
     "@types/bun": "catalog:dev",
-    "@types/react": "^19.2.17",
-    "react": "^19.2.7",
+    "@types/react": "^19.2.18",
+    "react": "^19.2.8",
     "satori": "catalog:",
     "sharp": "^0.35.3",
     "typescript": "catalog:dev",

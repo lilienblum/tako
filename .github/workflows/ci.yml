@@ -377,7 +377,7 @@ jobs:
             -e TAKO_BUILD_SHA="${{ github.sha }}" \
             -v "$PWD":/workspace \
             -w /workspace \
-            rust:1.95-alpine \
+            rust:1.97-alpine@sha256:3c38f3f82c2f3d73da3b38e18d279393a04cb43ddded0e35088a8c3324d40900 \
             sh -c 'apk add --no-cache build-base cmake perl pkgconfig vips-dev && PATH="/usr/local/cargo/bin:$PATH" RUSTFLAGS="-C target-feature=-crt-static" cargo build -p tako-server --release'
 
       - name: Upload server binary

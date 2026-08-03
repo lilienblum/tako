@@ -75,7 +75,7 @@ async-trait = "0.1"
 rcgen = { version = "0.14", features = ["pem"] }
 x509-parser = "0.18"
 time = { version = "0.3", features = ["local-offset"] }
-pem = "3.0"
+pem = "4.0"
 
 # Build system (archiving)
 zstd = "0.13"
