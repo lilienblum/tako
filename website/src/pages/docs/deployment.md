@@ -193,3 +193,22 @@ tako releases rollback <release-id> --env production
 ```
 
 Logs include app stdout/stderr and app-scoped server diagnostics. Releases show merged release history across mapped servers and mark the current release.
+
+## Metrics
+
+`tako-server` exposes Prometheus metrics on `127.0.0.1:9898` by default. Set `--metrics-port` to use another port or `0` to disable the endpoint and request metrics.
+
+| Metric                                   | What it measures                                  |
+| ---------------------------------------- | ------------------------------------------------- |
+| `tako_http_requests_total`               | Proxied requests by app and status class.         |
+| `tako_http_request_duration_seconds`     | End-to-end proxy latency.                         |
+| `tako_upstream_request_duration_seconds` | Time from the proxy to upstream response headers. |
+| `tako_http_active_connections`           | Active connections per app.                       |
+| `tako_cold_starts_total`                 | Cold starts triggered per app.                    |
+| `tako_cold_start_duration_seconds`       | Successful and failed cold-start duration.        |
+| `tako_cold_start_failures_total`         | Cold-start failures by reason.                    |
+| `tako_tls_handshake_failures_total`      | Tako-visible SNI and certificate lookup failures. |
+| `tako_instance_health`                   | Health of each instance, reported as `1` or `0`.  |
+| `tako_instances_running`                 | Running instance count per app.                   |
+
+Every metric includes a `server` label so one scraper can distinguish hosts in a multi-server environment. Request latency metrics cover proxied backend traffic, not static files, ACME challenges, or unmatched hosts.

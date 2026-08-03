@@ -226,31 +226,6 @@ fn test_delete_ca_removes_both_files() {
 }
 
 #[test]
-fn test_load_ca_rejects_old_filenames() {
-    let temp_dir = TempDir::new().unwrap();
-    let current_ca_cert_path = temp_dir.path().join("ca").join("ca.crt");
-    let old_ca_cert_path = temp_dir.path().join("ca").join("tako-ca.crt");
-
-    let store = LocalCAStore {
-        ca_cert_path: current_ca_cert_path.clone(),
-    };
-
-    let ca = LocalCA::generate().unwrap();
-    std::fs::create_dir_all(old_ca_cert_path.parent().unwrap()).unwrap();
-    std::fs::write(&old_ca_cert_path, ca.ca_cert_pem()).unwrap();
-    std::fs::write(old_ca_cert_path.with_extension("key"), &ca.ca_key_pem).unwrap();
-
-    let err = match store.load_ca() {
-        Ok(_) => panic!("old CA filenames should not be loaded"),
-        Err(err) => err,
-    };
-    match err {
-        CaError::FileRead(path, _) => assert_eq!(path, current_ca_cert_path),
-        other => panic!("expected FileRead error, got {other:?}"),
-    }
-}
-
-#[test]
 fn load_ca_rejects_unexpected_ca_identity() {
     let temp_dir = TempDir::new().unwrap();
     let ca_cert_path = temp_dir.path().join("ca").join("ca.crt");
@@ -259,7 +234,7 @@ fn load_ca_rejects_unexpected_ca_identity() {
     };
 
     std::fs::create_dir_all(ca_cert_path.parent().unwrap()).unwrap();
-    let wrong = generate_custom_ca("Tako Local Development CA", "Tako");
+    let wrong = generate_custom_ca("Unrelated Test CA", "Tako");
     std::fs::write(&ca_cert_path, &wrong.ca_cert_pem).unwrap();
     std::fs::write(ca_cert_path.with_extension("key"), &wrong.ca_key_pem).unwrap();
 
@@ -279,7 +254,7 @@ fn get_or_create_ca_regenerates_on_identity_mismatch() {
     };
 
     std::fs::create_dir_all(ca_cert_path.parent().unwrap()).unwrap();
-    let wrong = generate_custom_ca("Tako Local Development CA", "Tako");
+    let wrong = generate_custom_ca("Unrelated Test CA", "Tako");
     std::fs::write(&ca_cert_path, &wrong.ca_cert_pem).unwrap();
     std::fs::write(ca_cert_path.with_extension("key"), &wrong.ca_key_pem).unwrap();
 
@@ -338,26 +313,6 @@ fn effective_trust_returns_some_for_explicit_values() {
             TrustState::Trusted
         ]),
         Some(false)
-    );
-}
-
-#[test]
-fn effective_trust_prefers_first_explicit_result_legacy_assertions() {
-    assert_eq!(
-        effective_trust_by_precedence(&[TrustState::Unspecified, TrustState::Trusted]),
-        Some(true)
-    );
-    assert_eq!(
-        effective_trust_by_precedence(&[TrustState::Denied, TrustState::Trusted]),
-        Some(false)
-    );
-    assert_eq!(
-        effective_trust_by_precedence(&[TrustState::Trusted, TrustState::Denied]),
-        Some(true)
-    );
-    assert_eq!(
-        effective_trust_by_precedence(&[TrustState::Unspecified, TrustState::Unspecified]),
-        None
     );
 }
 

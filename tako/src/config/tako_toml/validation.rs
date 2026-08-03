@@ -3,7 +3,7 @@ use crate::build::BuildAdapter;
 use crate::config::error::{ConfigError, Result};
 use std::path::{Component, Path};
 
-impl Config {
+impl TakoToml {
     /// Validate the configuration
     pub fn validate(&self) -> Result<()> {
         // Validate app name if specified
@@ -198,7 +198,7 @@ impl Config {
     }
 }
 
-fn validate_backup_config(config: &Config, env_name: &str, backup: &BackupConfig) -> Result<()> {
+fn validate_backup_config(config: &TakoToml, env_name: &str, backup: &BackupConfig) -> Result<()> {
     let resource_name = backup.storage.as_str();
     if resource_name.is_empty() {
         return Err(ConfigError::Validation(format!(
@@ -374,7 +374,7 @@ fn validate_relative_file(value: &str, field: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_container_release_config(config: &Config) -> Result<()> {
+fn validate_container_release_config(config: &TakoToml) -> Result<()> {
     if config
         .main
         .as_deref()

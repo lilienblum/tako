@@ -644,16 +644,6 @@ async fn upgrade_one_server(
     }
 }
 
-/// A zero-downtime reload briefly runs the old and new server processes
-/// against the same state databases. That is only safe when both use the
-/// same storage engine: a server predating the turso migration coordinates
-/// WAL access through SQLite's locks, which turso cannot see, so overlapping
-/// the two engines corrupts the databases. When the running server does not
-/// report the turso engine, fall back to a full restart (brief downtime).
-fn reload_preserves_engine(info: &ServerRuntimeInfo) -> bool {
-    info.storage_engine.as_deref() == Some("turso")
-}
-
 async fn run_server_upgrade(
     name: &str,
     ssh: &mut SshClient,
@@ -717,23 +707,13 @@ async fn run_server_upgrade(
             .map_err(|e| format!("Failed to read runtime config: {e}"))?;
         let old_pid = old_info.pid;
 
-        let info = if reload_preserves_engine(&old_info) {
-            let _t = output::timed(&format!(
-                "Reload server (pid: {old_pid}) + wait for new process"
-            ));
-            ssh.tako_reload()
-                .await
-                .map_err(|e| format!("Reload failed: {e}"))?;
-            wait_for_primary_ready(ssh, UPGRADE_SOCKET_WAIT_TIMEOUT, old_pid, name).await?
-        } else {
-            let _t = output::timed(&format!(
-                "Restart server (pid: {old_pid}) + wait for new process — storage engine change, reload would overlap engines"
-            ));
-            ssh.tako_restart()
-                .await
-                .map_err(|e| format!("Restart failed: {e}"))?;
-            wait_for_primary_ready(ssh, UPGRADE_SOCKET_WAIT_TIMEOUT, old_pid, name).await?
-        };
+        let _t = output::timed(&format!(
+            "Reload server (pid: {old_pid}) + wait for new process"
+        ));
+        ssh.tako_reload()
+            .await
+            .map_err(|e| format!("Reload failed: {e}"))?;
+        let info = wait_for_primary_ready(ssh, UPGRADE_SOCKET_WAIT_TIMEOUT, old_pid, name).await?;
         tracing::debug!("New server process ready (pid: {})", info.pid);
 
         match ssh.tako_exit_upgrading(&owner).await {

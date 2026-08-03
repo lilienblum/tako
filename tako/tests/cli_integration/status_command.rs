@@ -64,24 +64,3 @@ fn test_status_without_tako_toml() {
         combined
     );
 }
-
-#[test]
-fn test_status_with_server_name_is_rejected() {
-    let temp = TempDir::new().unwrap();
-    let project_dir = temp.path().to_path_buf();
-
-    let output = run_tako(&["status", "tako-server"], &project_dir);
-
-    assert!(
-        !output.status.success(),
-        "status with server name should be rejected"
-    );
-
-    let combined = format!("{}{}", stdout_str(&output), stderr_str(&output));
-    assert!(
-        combined.contains("unexpected argument 'tako-server'")
-            || combined.contains("Usage: tako status"),
-        "should show parse usage error: {}",
-        combined
-    );
-}

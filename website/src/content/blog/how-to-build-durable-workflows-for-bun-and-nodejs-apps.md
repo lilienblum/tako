@@ -154,37 +154,7 @@ tako deploy
 
 Tako discovers `src/workflows/*.ts`, deploys the release, stores workflow state per app, and supervises workers next to HTTP instances. The deployment flow is documented in [Deployment](/docs/deployment/) and the command details are in the [CLI reference](/docs/cli/).
 
-Most apps can start with the default workflow config. If a workflow directory exists and you do not configure workers, Tako treats the app as scale-to-zero: no worker process is kept running until enqueue, signal, cron, delayed retry, sleep wakeup, or lease reclaim makes work runnable.
-
-When you want worker lanes, add named groups:
-
-```toml
-[workflows]
-workers = 0
-concurrency = 10
-
-[workflows.email]
-workers = 1
-concurrency = 20
-
-[workflows.fulfillment]
-workers = 0
-concurrency = 4
-```
-
-Then assign a workflow:
-
-```ts
-export default defineWorkflow<Payload>("fulfill-order", {
-  worker: "fulfillment",
-  retries: 4,
-  handler: async (payload, ctx) => {
-    // ...
-  },
-});
-```
-
-This gives latency-sensitive email a warm worker while fulfillment stays scale-to-zero until it has work. The worker lifecycle details are in [Workflow Workers That Scale to Zero](/blog/workflow-workers-scale-to-zero/).
+The current production supervisor runs one scale-to-zero workflow lane per app. No worker process is kept running until enqueue, signal, cron, delayed retry, sleep wakeup, or lease reclaim makes work runnable. Although the SDK and config parser already model named groups, worker counts, and concurrency, production does not yet use them for separate lanes or tuning. The current worker lifecycle is documented in [Workflow Workers That Scale to Zero](/blog/workflow-workers-scale-to-zero/) and the [`tako.toml` reference](/docs/tako-toml/).
 
 ```d2
 direction: right
@@ -208,14 +178,14 @@ That division is the reason the SDK stays simple. Your app imports `defineWorkfl
 
 Use a workflow when the work has state you care about after the request ends.
 
-| Need                   | Plain async code            | Tako workflow                      |
-| ---------------------- | --------------------------- | ---------------------------------- |
-| Retry a flaky API      | Catch and loop in memory    | Run-level and step-level retries   |
-| Survive deploys        | Hope the process finishes   | Completed steps are checkpointed   |
-| Avoid duplicate starts | Hand-roll a DB lock         | `uniqueKey` on enqueue             |
-| Wait for days          | Poll or split the job       | `ctx.sleep` or `ctx.waitFor`       |
-| Separate heavy work    | Add another process manager | Named worker groups in `tako.toml` |
-| Run scheduled jobs     | Cron plus queue glue        | `schedule` on `defineWorkflow`     |
+| Need                   | Plain async code            | Tako workflow                       |
+| ---------------------- | --------------------------- | ----------------------------------- |
+| Retry a flaky API      | Catch and loop in memory    | Run-level and step-level retries    |
+| Survive deploys        | Hope the process finishes   | Completed steps are checkpointed    |
+| Avoid duplicate starts | Hand-roll a DB lock         | `uniqueKey` on enqueue              |
+| Wait for days          | Poll or split the job       | `ctx.sleep` or `ctx.waitFor`        |
+| Separate heavy work    | Add another process manager | One separate workflow process today |
+| Run scheduled jobs     | Cron plus queue glue        | `schedule` on `defineWorkflow`      |
 
 For simple fire-and-forget work, a direct `await` is fine. For a one-line nightly task, cron might still be enough. But once the job needs retries, checkpoints, human approval, webhook callbacks, or a clean deploy story, durable workflows are the better primitive.
 

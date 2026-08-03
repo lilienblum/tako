@@ -62,7 +62,7 @@ pub(super) async fn prepare(
     let preset_ref = resolve_dev_preset_ref(&eff_app_dir, &cfg)?;
     let runtime_adapter = resolve_effective_dev_build_adapter(&eff_app_dir, &cfg, &preset_ref)
         .map_err(|e| format!("Failed to resolve runtime adapter: {}", e))?;
-    let (mut build_preset, _) = crate::build::load_dev_build_preset(&eff_app_dir, &preset_ref)
+    let (mut build_preset, _) = crate::build::load_dev_build_preset(&preset_ref)
         .await
         .map_err(|e| format!("Failed to resolve build preset '{}': {}", preset_ref, e))?;
     let plugin_ctx = tako_runtime::PluginContext {

@@ -68,6 +68,8 @@ tako deploy
 
 - [Quickstart](https://tako.sh/docs/quickstart) — install to live in minutes
 - [How Tako Works](https://tako.sh/docs/how-tako-works) — architecture and mental model
+- [Channels](https://tako.sh/docs/channels) — durable SSE and WebSocket streams
+- [Workflows](https://tako.sh/docs/workflows) — durable jobs, retries, schedules, and signals
 - [tako.toml Reference](https://tako.sh/docs/tako-toml) — every config option
 - [CLI Reference](https://tako.sh/docs/cli) — all commands and flags
 - [Framework Guides](https://tako.sh/docs/framework-guides) — adapter examples
@@ -77,6 +79,7 @@ tako deploy
 - [Examples](https://github.com/tako-sh/tako/tree/main/examples)
 - [SDK](https://www.npmjs.com/package/tako.sh)
 - [Benchmarks](BENCHMARKS.md) — current TLDR and raw-data links
+- [Runtime Protocol](PROTOCOL.md) — contracts shared by the CLI, server, and SDKs
 
 ## Agent Skills
 

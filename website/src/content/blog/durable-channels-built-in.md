@@ -11,7 +11,7 @@ Tako ships this as a built-in primitive. One channel definition gives you an aut
 
 ## How it works
 
-A channel is a named route your app defines. The Tako proxy owns the public endpoint at `/_tako/channels/<name>`, handles the SSE or WebSocket handshake, stores published messages in a bounded SQLite replay log, and asks your app for an auth decision on every connection.
+A channel is a named route your app defines. The Tako proxy owns the public endpoint at `/_tako/channels/<name>`, handles the SSE or WebSocket handshake, stores published messages in a bounded replay log, and asks your app for an auth decision on every connection.
 
 ```ts
 // src/channels/chat.ts
@@ -79,4 +79,4 @@ Most deploy tools stop at "get your code running." Kamal, Dokku, Coolify — the
 
 We think that's a weird place to stop. A proxy that already terminates TLS, tracks connected clients, and survives your app restarting is in the right position to own durable channels too. It's less code in your app, one less service to run, and one less vendor on your invoice.
 
-Durable channels are one piece of Tako's platform layer. The [roadmap](/blog/build-your-own-edge-network-on-commodity-hardware/) also includes queues, scheduled workflows, and image optimization — the primitives apps actually need, right where your app already lives. Try them today: `tako init`, add a channel, `tako dev`, and you have a realtime feature running locally over [real HTTPS](/blog/local-dev-with-real-https/). See the [docs](/docs/how-tako-works/) for the protocol details.
+Durable channels are one piece of Tako's platform layer. The [roadmap](/blog/build-your-own-edge-network-on-commodity-hardware/) also includes queues, scheduled workflows, and image optimization — the primitives apps actually need, right where your app already lives. Try them today: `tako init`, add a channel, `tako dev`, and you have a realtime feature running locally over [real HTTPS](/blog/local-dev-with-real-https/). See the [Channels reference](/docs/channels/) for the current contract.

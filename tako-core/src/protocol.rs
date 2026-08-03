@@ -244,8 +244,8 @@ pub enum Command {
 
     /// Enqueue a run of the named workflow.
     ///
-    /// The server inserts a row into `{data_dir}/apps/{app}/runs.db` and the
-    /// worker process polls it up within ~1s. If `unique_key` collides with
+    /// The server inserts a row into the app's workflow store and the worker
+    /// process claims it when runnable. If `unique_key` collides with
     /// an existing non-terminal run, this is a no-op and the existing run id
     /// is returned.
     EnqueueRun {
@@ -450,7 +450,7 @@ pub enum SourceIpMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum SslProvider {
-    #[serde(rename = "letsencrypt", alias = "lets-encrypt")]
+    #[serde(rename = "letsencrypt")]
     #[default]
     LetsEncrypt,
     Cloudflare,
@@ -554,7 +554,7 @@ pub struct ServerRuntimeInfo {
     #[serde(default)]
     pub acme_email: Option<String>,
     pub renewal_interval_hours: u64,
-    #[serde(default, alias = "worker")]
+    #[serde(default)]
     pub standby: bool,
     #[serde(default)]
     pub metrics_port: Option<u16>,
@@ -562,11 +562,6 @@ pub struct ServerRuntimeInfo {
     pub server_name: Option<String>,
     #[serde(default)]
     pub server_identity: Option<String>,
-    /// SQLite engine backing the server's state stores. Servers predating the
-    /// turso migration do not report this field; upgrade tooling uses it to
-    /// avoid overlapping two engines on the same database files.
-    #[serde(default)]
-    pub storage_engine: Option<String>,
 }
 
 /// Response from the server
@@ -621,7 +616,6 @@ pub struct AppStatus {
     pub name: String,
     pub version: String,
     pub instances: Vec<InstanceStatus>,
-    #[serde(default)]
     pub builds: Vec<BuildStatus>,
     pub state: AppState,
 

@@ -67,6 +67,8 @@ Channels are broadcast streams for app events. All authorized subscribers to the
 
 Unknown production routes return `404`. Unknown managed local development hosts return a helpful `421` that lists registered dev routes.
 
+The production proxy accepts request bodies up to 128 MiB. Channel WebSocket frame payloads use the same limit. Each client IP may have 2,048 active requests by default; operators can override that ceiling with `TAKO_MAX_REQUESTS_PER_IP`.
+
 ## TLS And Source IP
 
 Public routes use Let's Encrypt by default. Exact Let's Encrypt routes use HTTP-01 unless the environment has `ssl.cloudflare`, in which case they use Cloudflare DNS-01. Wildcard Let's Encrypt routes always require `ssl.cloudflare`. `ssl = "cloudflare"` uses Cloudflare Origin CA certificates instead.

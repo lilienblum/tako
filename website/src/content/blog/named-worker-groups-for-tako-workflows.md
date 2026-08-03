@@ -1,17 +1,19 @@
 ---
 title: "Named Worker Groups for Tako Workflows"
 date: "2026-04-29T04:29"
-description: "Tako workflows now support named worker pools, so a slow image job in the media group can't starve auth-critical email or default work."
+description: "The Tako SDK and config schema model named workflow groups, but production worker isolation is not wired yet."
 image: eef4025ddeaa
 ---
 
-Workflow queues have one classic failure mode: a slow job clogs the pipe and everything else waits behind it. A 30-second image resize lands in the queue, every worker grabs one, and the password-reset email that should have gone out in 200ms sits in `pending` while your users refresh their inbox.
+Workflow queues have one classic failure mode: a slow job clogs the pipe and everything else waits behind it. A 30-second image resize lands in the queue, and the password-reset email that should have gone out in 200ms sits in `pending` while users refresh their inbox.
 
-That's head-of-line blocking. The fix is the same one every queue ends up shipping eventually: separate pools for separate kinds of work. As of today, [Tako workflows](/blog/durable-workflows-are-here/) have it built in.
+Named worker groups are the intended answer, but they are not a shipped production guarantee yet. The JavaScript SDK records group metadata, discovery can filter on it, and `tako.toml` parses group settings. The production supervisor still starts one shared scale-to-zero lane per app with fixed runtime settings.
 
-## Pools, named after what they do
+This page describes the modeled API and the remaining boundary. Do not rely on group isolation, worker counts, concurrency settings, or per-server workflow overrides in production today. The [workflow reference](/docs/workflows/) and [`tako.toml` reference](/docs/tako-toml/) track the current behavior.
 
-You assign a workflow to a named pool with one option:
+## The modeled API
+
+A workflow can carry a group name:
 
 ```ts
 // src/workflows/process-image.ts
@@ -28,56 +30,48 @@ export default defineWorkflow<{ key: string }>("process-image", {
 });
 ```
 
-Workflows without `worker:` belong to the `default` group, so existing apps keep working unchanged. Add `worker: "email"` to your transactional sender, `worker: "media"` to anything CPU-heavy, and the runtime takes care of routing each enqueue to the right pool.
+Workflows without `worker:` belong to the SDK's default discovery group. This metadata is useful to the workflow loader and its tests, but the production supervisor does not currently launch a matching process per group.
 
-## Sized independently in `tako.toml`
+## The parsed configuration
 
-Each named group is its own row in the config, with the same two knobs as the base block — `workers` (always-on processes) and `concurrency` (parallel runs per worker). The base `[workflows]` block sets defaults that named groups inherit and override:
+The config schema accepts base settings, named groups, and per-server overrides:
 
 ```toml
 [workflows]
-workers = 0          # scale-to-zero default for everything
+workers = 0          # modeled base worker count
 concurrency = 10
 
 [workflows.email]
-workers = 1          # one always-on worker for fast, light jobs
-concurrency = 20     # plenty of parallelism per worker
+workers = 1          # modeled group override
+concurrency = 20
 
 [workflows.media]
-workers = 2          # two workers for heavy, CPU-bound jobs
-concurrency = 4      # but keep per-worker fan-out low
+workers = 2
+concurrency = 4
 
 [servers.lax.workflows.media]
-workers = 4          # bump it up on the box that has more cores
+workers = 4          # modeled per-server override
 ```
 
-The precedence chain reads top-down — built-in defaults, then `[workflows]`, then `[workflows.<group>]`, then any `[servers.<name>.workflows.<group>]` override on a specific host. The full table is in [`tako.toml`](/docs/tako-toml/).
+The parser computes the intended precedence chain: built-in defaults, `[workflows]`, `[workflows.<group>]`, then `[servers.<name>.workflows.<group>]`. Production worker supervision does not consume that resolved configuration yet, so changing these values does not create separate pools or tune the current lane.
 
-## Why isolation matters
+## What still needs to ship
 
-Without separate pools, every worker is a generalist. One image job lands, every worker grabs an image job, and the queue depth for `send-email` climbs while CPU is pinned by `sharp`. Your auth-critical work is _correct_ — it'll run eventually — but "eventually" is the wrong SLA for a password reset.
-
-With named groups, the runtime spawns a separate subprocess per group, each loading only the workflows assigned to it. The email worker picks up `send-email` runs and ignores `process-image` entirely; the media worker does the inverse. They contend for CPU at the OS scheduler, not at the queue.
+The missing piece is production orchestration. A complete implementation must resolve each configured group, launch the requested number of worker processes, pass the group and concurrency into each process, wake the right lane for runnable work, and apply per-server overrides. Until then, all workflows share one production worker process.
 
 ```d2
 direction: right
 
 ent1: "enqueue send-email" {style.fill: "#9BC4B6"; style.font-size: 14}
 ent2: "enqueue process-image" {style.fill: "#9BC4B6"; style.font-size: 14}
-server: "tako-server" {style.fill: "#E88783"; style.font-size: 14}
-email: "email worker\n(workers = 1)" {style.fill: "#FFF9F4"; style.stroke: "#2F2A44"; style.font-size: 14}
-media: "media worker\n(workers = 2)" {style.fill: "#FFF9F4"; style.stroke: "#2F2A44"; style.font-size: 14}
-def: "default worker\n(scale-to-zero)" {style.fill: "#FFF9F4"; style.stroke: "#2F2A44"; style.font-size: 14}
+server: "tako-server\ncurrent supervisor" {style.fill: "#E88783"; style.font-size: 14}
+shared: "shared worker lane\nscale-to-zero" {style.fill: "#FFF9F4"; style.stroke: "#2F2A44"; style.font-size: 14}
+future: "future group-aware\nsupervision" {style.fill: "#FFF9F4"; style.stroke: "#2F2A44"; style.font-size: 14}
 
-ent1 -> server -> email
-ent2 -> server -> media
-server -> def: "everything else"
+ent1 -> server
+ent2 -> server
+server -> shared: "today"
+server -> future: "not wired"
 ```
 
-Each pool keeps its own [scale-to-zero](/blog/scale-to-zero-without-containers/) lifecycle: a group with `workers = 0` doesn't spawn until the first matching enqueue or cron tick lands, and idles back out when there's nothing to do. So the `media` group can sit at zero overnight and your VPS doesn't pay rent on it; the `email` group can stay warm because cold-starting an image library every 200ms email isn't free.
-
-## Per-server tuning
-
-The same precedence rules cascade into per-server blocks. If your `lax` box has more cores than your `cdg` box, give `media` four workers there and one elsewhere — same `tako.toml`, [different defaults per host](/blog/one-config-many-servers/), no fork in the workflow code.
-
-Drop `worker: "name"` into your handlers, add a `[workflows.<name>]` block to `tako.toml`, and `tako deploy`. The slow jobs get their own lane, the fast jobs stay fast, and your password resets stop waiting in line behind a thumbnail render.
+The current shared lane still has a [scale-to-zero](/blog/scale-to-zero-without-containers/) lifecycle. It starts when work becomes runnable and idles out after five minutes. If you need hard isolation today, deploy the workloads as separate apps or use another process manager. Treat named groups as reserved configuration until the production supervisor is group-aware.

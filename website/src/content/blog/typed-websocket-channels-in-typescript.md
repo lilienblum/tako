@@ -14,7 +14,7 @@ Durability is part of the channel contract, but it is scoped to delivery. Every 
 
 ## The channel is the contract
 
-A JavaScript or TypeScript channel is a default export from `src/channels/*.ts` by default. The first argument is the wire name, `paramsSchema` is a TypeBox schema, `auth.verify` decides access, and `handler` makes the channel bidirectional over WebSocket.
+A JavaScript or TypeScript channel is a default export from `src/channels/*.ts` by default. The first argument is the wire name, `paramsSchema` is a TypeBox schema, `auth.verify` decides access, and the presence of `handler` selects bidirectional WebSocket transport.
 
 ```ts
 // src/channels/presence.ts
@@ -46,7 +46,7 @@ export default defineChannel("presence", {
 
 TypeBox matters here because it gives Tako both sides of the shape. Per the [TypeBox docs](https://github.com/sinclairzx81/typebox), a schema is a JSON Schema object that can also infer a TypeScript type. Tako uses that JSON Schema to validate `/_tako/channels/presence?roomId=lobby` before asking your app to authorize anything, while TypeScript uses the same declaration to type `params.roomId` in your callback.
 
-No handler means receive-only SSE. A handler means WebSocket: clients can send JSON frames, each frame routes through the matching handler, and the handler's return value is what gets fanned out. See [How Tako Works](/docs/how-tako-works/) for the current protocol view.
+No handler means receive-only SSE. A handler declaration selects WebSocket, and the current v0 proxy stores and broadcasts client `{ type, data }` frames as sent. App-side handler callbacks are not yet part of the deployed dispatch path. See the [Channels reference](/docs/channels/) for the current contract.
 
 ## Auth happens before messages
 
@@ -58,7 +58,7 @@ For normal SSE requests, auth can ride in headers or cookies. Browser WebSockets
 
 If a channel requires header auth and the WebSocket upgrade did not include that header, the proxy waits briefly for this frame. It parses the token as the declared header value, asks your app's `verify` callback through `POST /channels/authorize`, and only then starts accepting publish frames.
 
-That keeps auth in one place: your callback still receives `{ header, cookie, params, channel, operation }`, and `operation` tells you whether the request is subscribing, connecting, or publishing. Cookie-only auth still works too; set `headerName: false` and `cookieName` in the channel definition.
+That keeps auth in one place: your callback receives `{ header, cookie, params, channel, operation }`, and `operation` tells you whether the request is subscribing or connecting. Cookie-only auth still works too; set `headerName: false` and `cookieName` in the channel definition.
 
 ```d2
 direction: right
@@ -102,22 +102,13 @@ That window is intentionally short by default: 10 minutes.
 
 ## Store canonical history in your app
 
-Channel replay is for delivery continuity, not product history. If the event is part of your app's source of truth, write it to your database from the handler and return the value to broadcast:
+Channel replay is for delivery continuity, not product history. If the event is part of your app's source of truth, write it through a normal authenticated app endpoint, then publish the saved value from server-side code:
 
 ```ts
-// src/channels/chat.ts
-import { defineChannel } from "tako.sh";
+import chat from "../channels/chat";
 
-export default defineChannel("chat", {
-  paramsSchema: (t) => t.Object({ roomId: t.String({ minLength: 1 }) }),
-  replayWindowMs: 10 * 60 * 1000,
-  handler: {
-    msg: async (data, ctx) => {
-      await db.messages.insert({ roomId: ctx.params.roomId, ...data });
-      return data;
-    },
-  },
-}).$messageTypes<{ msg: { text: string; userId: string } }>();
+const message = await db.messages.insert({ roomId, text, userId });
+await chat({ roomId }).publish({ type: "msg", data: message });
 ```
 
 That keeps the TypeScript surface small: one channel primitive for WebSocket/SSE delivery, with app storage used when messages need to outlive the reconnect window.

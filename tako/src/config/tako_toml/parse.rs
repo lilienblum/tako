@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-impl Config {
+impl TakoToml {
     /// Load tako.toml from a directory
     pub fn load_from_dir<P: AsRef<Path>>(dir: P) -> Result<Self> {
         let path = dir.as_ref().join("tako.toml");
@@ -54,7 +54,7 @@ impl Config {
         let workflows = parse_workflows_config(&raw, "workflows")?.unwrap_or_default();
         let images = parse_images_config(&raw)?;
         let storages = parse_storage_resources(&raw)?;
-        let mut config = Config {
+        let mut config = TakoToml {
             name,
             main,
             runtime,
@@ -72,7 +72,7 @@ impl Config {
             workflows,
             images,
             storages,
-            ..Config::default()
+            ..TakoToml::default()
         };
 
         // Parse [vars] section (global) and [vars.*] sections (per-environment)
@@ -115,12 +115,6 @@ impl Config {
             && let Some(table) = servers.as_table()
         {
             for (key, value) in table {
-                if key == "workflows" {
-                    return Err(ConfigError::Validation(
-                        "[servers.workflows] is no longer valid. Use top-level [workflows] for app-wide workflow settings, or [servers.<name>.workflows] for a server override."
-                            .to_string(),
-                    ));
-                }
                 let server_config = parse_server_config(value)?;
                 config.servers.per_server.insert(key.clone(), server_config);
             }

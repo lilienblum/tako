@@ -1,6 +1,3 @@
-use std::fs;
-use std::path::Path;
-
 use crate::build::adapter::PresetGroup;
 use crate::build::preset_cache;
 
@@ -20,21 +17,18 @@ enum PresetResolveMode {
 }
 
 pub async fn load_build_preset(
-    project_dir: &Path,
     preset_ref: &str,
 ) -> Result<(BuildPreset, ResolvedPresetSource), String> {
-    load_build_preset_with_mode(project_dir, preset_ref, PresetResolveMode::Deploy).await
+    load_build_preset_with_mode(preset_ref, PresetResolveMode::Deploy).await
 }
 
 pub async fn load_dev_build_preset(
-    project_dir: &Path,
     preset_ref: &str,
 ) -> Result<(BuildPreset, ResolvedPresetSource), String> {
-    load_build_preset_with_mode(project_dir, preset_ref, PresetResolveMode::Dev).await
+    load_build_preset_with_mode(preset_ref, PresetResolveMode::Dev).await
 }
 
 async fn load_build_preset_with_mode(
-    project_dir: &Path,
     preset_ref: &str,
     mode: PresetResolveMode,
 ) -> Result<(BuildPreset, ResolvedPresetSource), String> {
@@ -59,7 +53,6 @@ async fn load_build_preset_with_mode(
         path,
         commit: commit.clone(),
     };
-    remove_legacy_build_lock(project_dir);
     Ok((preset, resolved))
 }
 
@@ -210,20 +203,6 @@ pub async fn load_available_group_presets(group: PresetGroup) -> Result<Vec<Stri
     super::parse_group_manifest_preset_names(path, &content)
 }
 
-fn remove_legacy_build_lock(project_dir: &Path) {
-    let lock_path = project_dir.join(".tako/build.lock.json");
-    if !lock_path.exists() {
-        return;
-    }
-    if let Err(error) = fs::remove_file(&lock_path) {
-        tracing::warn!(
-            "Failed to remove legacy preset lock file {}: {}",
-            lock_path.display(),
-            error
-        );
-    }
-}
-
 async fn fetch_preset_content_by_commit(
     repo: &str,
     path: &str,
@@ -295,6 +274,7 @@ fn parse_github_branch_commit_sha(raw: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn fetch_preset_content_from_master_branch_returns_generic_fetch_error() {
@@ -438,59 +418,6 @@ dev = ["next", "dev"]
         )
         .unwrap_err();
         assert_eq!(err, "Failed to fetch preset");
-    }
-
-    #[test]
-    fn load_build_preset_ignores_and_removes_legacy_build_lock() {
-        let _lock = crate::paths::test_tako_home_env_lock();
-        let previous = std::env::var_os("TAKO_HOME");
-        let home = tempfile::TempDir::new().unwrap();
-        let project = tempfile::TempDir::new().unwrap();
-        unsafe {
-            std::env::set_var("TAKO_HOME", home.path());
-        }
-
-        let repo = official_preset_repo();
-        let path = "presets/javascript.toml";
-        let branch_sha = "d0ff9bec5b3d42a874b1bff544249b3a4c530d9f";
-        let manifest = r#"
-[nextjs]
-main = ".next/tako-entry.mjs"
-dev = ["next", "dev"]
-"#;
-        crate::build::preset_cache::write_cached(&repo, branch_sha, path, manifest).unwrap();
-        crate::build::preset_cache::update_freshness(&repo, OFFICIAL_PRESET_BRANCH, branch_sha)
-            .unwrap();
-
-        let lock_path = project.path().join(".tako/build.lock.json");
-        fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
-        fs::write(
-            &lock_path,
-            r#"{
-  "schema_version": 1,
-  "preset": {
-    "preset_ref": "javascript/nextjs",
-    "repo": "tako-sh/tako",
-    "path": "presets/javascript.toml",
-    "commit": "eb9c0c1dd0b123ce72c29397826966d831617d0a"
-  }
-}"#,
-        )
-        .unwrap();
-
-        let runtime = tokio::runtime::Runtime::new().unwrap();
-        let (preset, resolved) = runtime
-            .block_on(load_build_preset(project.path(), "javascript/nextjs"))
-            .unwrap();
-
-        match previous {
-            Some(value) => unsafe { std::env::set_var("TAKO_HOME", value) },
-            None => unsafe { std::env::remove_var("TAKO_HOME") },
-        }
-
-        assert_eq!(preset.name, "nextjs");
-        assert_eq!(resolved.commit, branch_sha);
-        assert!(!lock_path.exists());
     }
 
     #[test]

@@ -16,7 +16,7 @@ The user may pass a theme, angle, or constraint as `$ARGUMENTS` (e.g. "focus on 
 
 ### Step 1 — Gather context
 
-1. Read `SPEC.md` to understand current Tako capabilities, recent additions, and roadmap hints.
+1. Read `README.md` and the relevant pages in `website/src/pages/docs/` to understand current Tako capabilities.
 2. List existing posts in `website/src/content/blog/` and read titles + first paragraphs to avoid duplication and detect coverage gaps.
 3. Skim recent commits (`git log --oneline -n 30`) for shipped-but-unannounced features.
 4. Check memory for the platform vision (`project_platform_vision.md`) and competitor landscape if present.
@@ -47,7 +47,7 @@ Before proposing a comparison, check `website/src/content/blog/` for an existing
 Reject ideas that:
 
 - Duplicate an existing post's angle (different wording on the same thesis doesn't count as new)
-- Make claims that aren't backed by SPEC.md or shipped code
+- Make claims that are not backed by current documentation, shipped code, or tests
 - Are generic dev-tooling content with no Tako-specific hook
 
 **Title shape**: every proposed title should contain the concrete nouns a developer would search for (tool names, technologies, actions). Comparison and deep-dive posts are naturally search-shaped; announcement and opinion titles tend to drift clever — pull them back toward literal when the topic has an obvious search phrase. A good sanity check: would a developer plausibly type this title (or something close to it) into Google?
@@ -73,7 +73,7 @@ If two ideas tie, prefer the SEO-shaped one. If they're both SEO-shaped, prefer 
 1. **Title** — _type_ ⭐ Recommended
    Angle: one sentence on the thesis or hook.
    Why now: timeliness, coverage gap, or audience reason.
-   Anchor: SPEC.md section, source file, commit, or competitor reference.
+   Anchor: docs page, source or test file, commit, or competitor reference.
 
 2. **Title** — _type_
    Angle: …
@@ -94,7 +94,7 @@ After the list, add one short line noting which existing posts each idea is clos
 
 - Exactly 5 ideas. No more, no less.
 - Mark at most 2 as **Recommended**. One is fine. Zero is not — pick the best of the five if nothing stands out.
-- Every idea must cite an anchor (SPEC section, file, commit, or named competitor). No vague "developers care about X" pitches.
+- Every idea must cite an anchor (docs page, source or test file, commit, or named competitor). No vague "developers care about X" pitches.
 - Don't propose posts that already exist under a different title — check `website/src/content/blog/` first.
 - Don't write the post. This command produces ideas only; the user will invoke `/blog-post` separately for whichever they pick.
 - Keep each idea to the four-line block above. No long pitches, no draft outlines.

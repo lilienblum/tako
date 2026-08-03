@@ -3,8 +3,7 @@ use super::packaging::{
     build_container_target_artifacts, merge_assets_locally, package_target_artifact,
 };
 use super::runtime_version::{
-    RUNTIME_VERSION_OUTPUT_FILE, extract_semver_from_version_output,
-    resolve_runtime_version_from_workspace, save_package_manager_version_to_manifest,
+    extract_semver_from_version_output, save_package_manager_version_to_manifest,
     save_runtime_version_to_manifest,
 };
 use super::*;
@@ -555,37 +554,6 @@ fn extract_semver_from_version_output_handles_common_formats() {
         extract_semver_from_version_output("v22.12.0"),
         Some("22.12.0".to_string())
     );
-}
-
-#[test]
-fn save_runtime_version_cleans_up_old_version_file() {
-    let temp = TempDir::new().unwrap();
-    let workspace = temp.path().join("workspace");
-    std::fs::create_dir_all(&workspace).unwrap();
-    std::fs::write(
-        workspace.join("app.json"),
-        r#"{"runtime":"bun","main":"index.ts","idle_timeout":300}"#,
-    )
-    .unwrap();
-    std::fs::write(workspace.join(RUNTIME_VERSION_OUTPUT_FILE), "1.3.9").unwrap();
-
-    save_runtime_version_to_manifest(&workspace, "1.3.9").unwrap();
-
-    assert!(!workspace.join(RUNTIME_VERSION_OUTPUT_FILE).exists());
-}
-
-#[test]
-fn resolve_runtime_version_from_workspace_ignores_old_runtime_version_file() {
-    let temp = TempDir::new().unwrap();
-    let workspace = temp.path().join("workspace");
-    std::fs::create_dir_all(&workspace).unwrap();
-    let old_tools_file = format!(".{}{}", "proto", "tools");
-    std::fs::write(workspace.join(old_tools_file), "bun = \"1.3.9\"\n").unwrap();
-
-    let resolved =
-        resolve_runtime_version_from_workspace(&workspace, "bun").expect("resolve runtime version");
-
-    assert_eq!(resolved, "latest");
 }
 
 #[test]

@@ -4,8 +4,8 @@ use super::super::*;
 
 #[test]
 fn test_parse_empty_file() {
-    let config = Config::parse("").unwrap();
-    assert_eq!(config, Config::default());
+    let config = TakoToml::parse("").unwrap();
+    assert_eq!(config, TakoToml::default());
 }
 
 // ==================== [workflows] / [servers.*.workflows] Tests ====================
@@ -19,7 +19,7 @@ name = "app"
 workers = 3
 concurrency = 20
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
     assert_eq!(config.workflows.base.workers, Some(3));
     assert_eq!(config.workflows.base.concurrency, Some(20));
     assert!(config.workflows.groups.is_empty());
@@ -37,7 +37,7 @@ concurrency = 10
 run = ["./worker", "email"]
 workers = 2
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
     let email = config.workflows.groups.get("email").unwrap();
     assert_eq!(
         email.run,
@@ -59,7 +59,7 @@ name = "app"
 [servers.lax.workflows]
 workers = 2
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
     let lax = config.servers.per_server.get("lax").unwrap();
     let wf = lax.workflows.as_ref().unwrap();
     assert_eq!(wf.base.workers, Some(2));
@@ -76,7 +76,7 @@ concurrency = 5
 [servers.lax.workflows]
 workers = 4
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
     let lax = config.workflows_for_server("lax");
     assert_eq!(lax.workers, 4);
     assert_eq!(lax.concurrency, 5);
@@ -95,7 +95,7 @@ qualities = [75, 90]
 formats = ["avif", "webp"]
 "#;
 
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
 
     assert_eq!(
         config.images.local_patterns,
@@ -128,7 +128,7 @@ name = "app"
 remote_patterns = ["ftp://cdn.example.com/**"]
 "#;
 
-    let err = Config::parse(toml).unwrap_err();
+    let err = TakoToml::parse(toml).unwrap_err();
 
     assert!(format!("{err}").contains("[images]"), "{err}");
 }
@@ -143,7 +143,7 @@ concurrency = 5
 [servers.lax]
 # no workflows override
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
     let lax = config.workflows_for_server("lax");
     assert_eq!(lax.workers, 1);
     assert_eq!(lax.concurrency, 5);
@@ -151,7 +151,7 @@ concurrency = 5
 
 #[test]
 fn test_workflows_for_server_falls_back_to_zero_config() {
-    let config = Config::parse("name = \"x\"").unwrap();
+    let config = TakoToml::parse("name = \"x\"").unwrap();
     let wf = config.workflows_for_server("any");
     assert_eq!(wf.workers, 0); // scale-to-zero default
     assert_eq!(wf.concurrency, 10);
@@ -173,7 +173,7 @@ concurrency = 20
 [servers.lax.workflows.email]
 workers = 4
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
     let email = config.workflows_for_server_worker("lax", Some("email"));
     assert_eq!(email.workers, 4);
     assert_eq!(email.concurrency, 20);
@@ -190,7 +190,7 @@ fn test_empty_workflows_sections_use_built_in_defaults() {
 
 [servers.lax.workflows]
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
     let wf = config.workflows_for_server("lax");
     assert_eq!(wf.workers, 0);
     assert_eq!(wf.concurrency, 10);
@@ -202,7 +202,7 @@ fn test_parse_server_with_unknown_field_errors() {
 [servers.lax]
 unknown_field = 1
 "#;
-    let err = Config::parse(toml).unwrap_err();
+    let err = TakoToml::parse(toml).unwrap_err();
     assert!(err.to_string().to_lowercase().contains("unknown"));
 }
 
@@ -213,7 +213,7 @@ fn test_parse_workflows_with_unknown_field_errors() {
 workers = 1
 bogus = true
 "#;
-    let err = Config::parse(toml).unwrap_err();
+    let err = TakoToml::parse(toml).unwrap_err();
     assert!(err.to_string().to_lowercase().contains("bogus"));
 }
 
@@ -223,7 +223,7 @@ fn test_parse_workflows_rejects_empty_run() {
 [workflows.video]
 run = []
 "#;
-    let err = Config::parse(toml).unwrap_err();
+    let err = TakoToml::parse(toml).unwrap_err();
     assert!(err.to_string().contains("workflows.video.run"));
 }
 
@@ -233,16 +233,6 @@ fn test_parse_workflows_rejects_invalid_worker_group_name() {
 [workflows.Email]
 workers = 1
 "#;
-    let err = Config::parse(toml).unwrap_err();
+    let err = TakoToml::parse(toml).unwrap_err();
     assert!(err.to_string().contains("Workflow worker group"));
-}
-
-#[test]
-fn test_servers_workflows_reserved_default_is_rejected() {
-    let toml = r#"
-[servers.workflows]
-workers = 1
-"#;
-    let err = Config::parse(toml).unwrap_err();
-    assert!(err.to_string().contains("[workflows]"));
 }

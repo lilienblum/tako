@@ -404,45 +404,8 @@ fn run_bootstrap_helper_with_sudo() -> Result<(), Box<dyn std::error::Error>> {
     )
 }
 
-/// Best-effort cleanup of the old `sh.tako.loopback-proxy` launchd service and
-/// files from before the rename to `tako-dev-proxy`.
-#[cfg(target_os = "macos")]
-fn cleanup_old_loopback_proxy() {
-    const OLD_LABEL: &str = "sh.tako.loopback-proxy";
-    const OLD_BOOTSTRAP_LABEL: &str = "sh.tako.loopback-bootstrap";
-    const OLD_PLIST: &str =
-        "/Library/Application Support/Tako/launchd/sh.tako.loopback-proxy.plist";
-    const OLD_BOOTSTRAP_PLIST: &str = "/Library/LaunchDaemons/sh.tako.loopback-bootstrap.plist";
-    const OLD_BINARY: &str = "/Library/Application Support/Tako/bin/tako-loopback-proxy";
-
-    let _ = std::process::Command::new("sudo")
-        .args(["launchctl", "bootout", &format!("system/{OLD_LABEL}")])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
-    let _ = std::process::Command::new("sudo")
-        .args([
-            "launchctl",
-            "bootout",
-            &format!("system/{OLD_BOOTSTRAP_LABEL}"),
-        ])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
-    for path in [OLD_PLIST, OLD_BOOTSTRAP_PLIST, OLD_BINARY] {
-        if std::path::Path::new(path).exists() {
-            let _ = std::process::Command::new("sudo")
-                .args(["rm", "-f", path])
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status();
-        }
-    }
-}
-
 #[cfg(target_os = "macos")]
 fn install_or_update(desired_binary: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    cleanup_old_loopback_proxy();
     install_binary_with_sudo(desired_binary, &install_binary_path(), "755")?;
     ensure_parent_dir_with_sudo(&plist_path())?;
     write_system_file_with_sudo(DEV_PROXY_PLIST_PATH, &launchd_plist(&install_binary_path()))?;

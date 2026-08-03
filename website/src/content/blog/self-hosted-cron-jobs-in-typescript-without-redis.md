@@ -17,13 +17,13 @@ Tako workflows make that a built-in app primitive: TypeScript cron, durable runs
 
 A production cron job is not just a clock. The clock is the trigger; the durable queue is what makes the trigger safe.
 
-| Job need         | Redis-backed queue stack                        | Tako workflow                                          |
-| ---------------- | ----------------------------------------------- | ------------------------------------------------------ |
-| Schedule         | External scheduler or delayed-set polling       | `schedule` on `defineWorkflow`                         |
-| Durable state    | Redis persistence or another database           | Per-app SQLite at `{tako_data_dir}/apps/<app>/runs.db` |
-| Dedupe           | Job id / uniqueness key in queue library        | `uniqueKey`, plus internal cron keys                   |
-| Retries          | Worker library retry policy                     | Run-level and step-level retries                       |
-| Worker lifecycle | Separate worker process to deploy and supervise | Tako-supervised worker, scale-to-zero by default       |
+| Job need         | Redis-backed queue stack                        | Tako workflow                                    |
+| ---------------- | ----------------------------------------------- | ------------------------------------------------ |
+| Schedule         | External scheduler or delayed-set polling       | `schedule` on `defineWorkflow`                   |
+| Durable state    | Redis persistence or another database           | App-local SQLite at `data/tako/workflows.sqlite` |
+| Dedupe           | Job id / uniqueness key in queue library        | `uniqueKey`, plus internal cron keys             |
+| Retries          | Worker library retry policy                     | Run-level and step-level retries                 |
+| Worker lifecycle | Separate worker process to deploy and supervise | Tako-supervised worker, scale-to-zero by default |
 
 Tako's workflow state is owned by `tako-server`, not the SDK. Your HTTP app and worker talk to the shared internal Unix socket; the server inserts runs, stores completed steps, ticks schedules, reclaims expired leases, and wakes workers. The full workflow architecture is documented in [the Tako docs](/docs/), and the worker knobs live in [the `tako.toml` reference](/docs/tako-toml/).
 
@@ -33,7 +33,7 @@ direction: right
 clock: "cron clock" {style.fill: "#FFF9F4"; style.stroke: "#2F2A44"; style.font-size: 16}
 schedules: "schedules table" {style.fill: "#9BC4B6"; style.font-size: 16}
 ticker: "tako-server ticker" {style.fill: "#E88783"; style.font-size: 16}
-runs: "runs.db" {style.fill: "#FFF9F4"; style.stroke: "#2F2A44"; style.font-size: 16}
+runs: "data/tako/workflows.sqlite" {style.fill: "#FFF9F4"; style.stroke: "#2F2A44"; style.font-size: 16}
 supervisor: "worker supervisor" {style.fill: "#9BC4B6"; style.font-size: 16}
 worker: "TypeScript workflow" {style.fill: "#E88783"; style.font-size: 16}
 
@@ -41,7 +41,7 @@ clock -> ticker: "every second"
 worker -> schedules: "register schedule on boot"
 ticker -> runs: "enqueue due run + uniqueKey"
 runs -> supervisor: "wake"
-supervisor -> worker: "spawn if workers = 0"
+supervisor -> worker: "spawn when work is runnable"
 worker -> runs: "claim / save steps / complete"
 ```
 
@@ -127,28 +127,15 @@ The contract is honest: durable execution cannot make arbitrary side effects exa
 
 For most cron jobs, the best worker is no worker at all until the clock fires.
 
-Scale-to-zero is the default when an app has a `src/workflows/` directory:
+The current production supervisor uses one scale-to-zero workflow lane when an app has a `src/workflows/` directory:
 
 ```toml
 # tako.toml
 name = "digest-app"
 
-[workflows]
-workers = 0
-concurrency = 10
 ```
 
-With `workers = 0`, `tako-server` keeps the queue, schedules, and ticker alive. On the first enqueue or cron tick, the supervisor spawns one worker process. The worker claims due runs, processes them up to `concurrency`, and exits after its idle window. In production that idle window is five minutes; under `tako dev` it is shorter so code changes take effect on the next enqueue.
-
-If your job runs constantly, pin workers up:
-
-```toml
-[workflows]
-workers = 1
-concurrency = 20
-```
-
-Named groups work too. Put noisy email jobs in `worker: "email"`, then give `[workflows.email]` its own process count. The deployment docs cover the broader release flow in [deployment](/docs/deployment/), and the local loop is described in [development](/docs/development/).
+`tako-server` keeps the queue, schedules, and ticker alive. On the first enqueue or cron tick, the supervisor spawns one worker process, then lets it exit after five idle minutes. The config parser accepts worker counts, concurrency, named groups, and per-server overrides, but production supervision does not consume those settings yet. The current behavior is tracked in the [`tako.toml` reference](/docs/tako-toml/); the broader release flow is in [deployment](/docs/deployment/), and the local loop is described in [development](/docs/development/).
 
 To try it locally:
 

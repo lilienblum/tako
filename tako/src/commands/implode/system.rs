@@ -104,33 +104,24 @@ pub(super) fn gather_macos_system_targets() -> Vec<SystemTarget> {
 
 /// Check whether any Tako CA certificates exist in the system keychain (macOS)
 /// or trust store (Linux).
-/// Common names of all Tako dev CA certs we've ever shipped. Include
-/// legacy names so `tako uninstall` can clean up machines that still have
-/// an older cert pinned from a previous Tako version.
 #[cfg(target_os = "macos")]
-const TAKO_CA_COMMON_NAMES: &[&str] = &[
-    "Tako Development CA",
-    "Tako Development",
-    "Tako Local Development CA",
-];
+const TAKO_CA_COMMON_NAME: &str = "Tako Development CA";
 
 #[cfg(target_os = "macos")]
 pub(super) fn has_ca_certs_in_keychain() -> bool {
-    TAKO_CA_COMMON_NAMES.iter().any(|cn| {
-        Command::new("security")
-            .args([
-                "find-certificate",
-                "-c",
-                cn,
-                "/Library/Keychains/System.keychain",
-            ])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-    })
+    Command::new("security")
+        .args([
+            "find-certificate",
+            "-c",
+            TAKO_CA_COMMON_NAME,
+            "/Library/Keychains/System.keychain",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 #[cfg(target_os = "linux")]
@@ -146,34 +137,29 @@ pub(super) fn has_ca_certs_in_keychain() -> bool {
 pub(super) fn remove_ca_certs_from_keychain() {
     let mut removed = 0u32;
     loop {
-        // Find the SHA-1 hash of the first matching certificate under any
-        // of our known CA names. `security find-certificate -c` is an
-        // exact-match on common name, so we have to try each one.
-        let hash = TAKO_CA_COMMON_NAMES.iter().find_map(|cn| {
-            let output = Command::new("security")
-                .args([
-                    "find-certificate",
-                    "-c",
-                    cn,
-                    "-Z",
-                    "/Library/Keychains/System.keychain",
-                ])
-                .stdin(Stdio::null())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .output()
-                .ok()?;
-            if !output.status.success() {
-                return None;
-            }
-            String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .find_map(|line| {
-                    line.strip_prefix("SHA-1 hash:")
-                        .or_else(|| line.strip_prefix("      SHA-1 hash:"))
-                        .map(|h| h.trim().to_string())
-                })
-        });
+        let hash = Command::new("security")
+            .args([
+                "find-certificate",
+                "-c",
+                TAKO_CA_COMMON_NAME,
+                "-Z",
+                "/Library/Keychains/System.keychain",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .and_then(|output| {
+                String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .find_map(|line| {
+                        line.strip_prefix("SHA-1 hash:")
+                            .or_else(|| line.strip_prefix("      SHA-1 hash:"))
+                            .map(|hash| hash.trim().to_string())
+                    })
+            });
 
         let Some(hash) = hash else {
             break;

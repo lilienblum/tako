@@ -57,6 +57,22 @@ export const pageOgImages = [
       "How Tako handles local development, rolling deploys, TLS, health checks, request routing, and scaling.",
   },
   {
+    path: "/docs/channels/",
+    slug: "docs/channels",
+    label: "tako.sh/docs",
+    title: "Tako Channels for Durable SSE and WebSockets",
+    description:
+      "Build typed SSE and WebSocket streams with auth, bounded replay, reconnection, and multi-server delivery.",
+  },
+  {
+    path: "/docs/workflows/",
+    slug: "docs/workflows",
+    label: "tako.sh/docs",
+    title: "Tako Durable Workflows",
+    description:
+      "Run durable background work with checkpoints, retries, schedules, signals, and scale-to-zero workers.",
+  },
+  {
     path: "/docs/cli/",
     slug: "docs/cli",
     label: "tako.sh/docs",

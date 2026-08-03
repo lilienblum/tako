@@ -147,30 +147,6 @@ fn config_flag_parses_globally_after_subcommand() {
 }
 
 #[test]
-fn init_rejects_removed_positional_dir_argument() {
-    let result = Cli::try_parse_from(["tako", "init", "apps/web"]);
-    match result {
-        Ok(_) => panic!("expected parse failure"),
-        Err(err) => assert!(
-            err.to_string().contains("unexpected argument 'apps/web'"),
-            "unexpected error: {err}"
-        ),
-    }
-}
-
-#[test]
-fn logs_rejects_removed_positional_dir_argument() {
-    let result = Cli::try_parse_from(["tako", "logs", "apps/web"]);
-    match result {
-        Ok(_) => panic!("expected parse failure"),
-        Err(err) => assert!(
-            err.to_string().contains("unexpected argument 'apps/web'"),
-            "unexpected error: {err}"
-        ),
-    }
-}
-
-#[test]
 fn logs_json_flag_parses() {
     let cli = Cli::try_parse_from(["tako", "logs", "--json"]).unwrap();
     let Some(Commands::Logs { .. }) = cli.command else {

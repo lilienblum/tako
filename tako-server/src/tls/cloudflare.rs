@@ -339,7 +339,7 @@ mod tests {
         assert!(is_account_api_token("cfat_abc"));
         assert!(is_account_api_token("  cfat_abc"));
         assert!(!is_account_api_token("cfut_abc"));
-        assert!(!is_account_api_token("legacy-token"));
+        assert!(!is_account_api_token("invalid-token"));
     }
 
     #[tokio::test]

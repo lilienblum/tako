@@ -254,7 +254,7 @@ fn tako_reload_command_uses_direct_sudo() {
     // run_as_root uses direct sudo, not sh -c wrapping
     assert!(
         !command.contains("sudo sh -c"),
-        "reload should use direct sudo for restricted sudoers compatibility"
+        "reload should use direct sudo with restricted sudoers rules"
     );
     assert!(command.contains("then sudo /usr/local/bin/tako-server-service reload"));
 }

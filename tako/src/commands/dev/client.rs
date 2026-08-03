@@ -355,7 +355,7 @@ pub(super) async fn run_connected_dev_client(
     if interactive {
         let adapter_name = if let Ok(cfg) = load_dev_tako_toml(&session.config_path) {
             if let Ok(preset_ref) = resolve_dev_preset_ref(&session.project_dir, &cfg) {
-                match crate::build::load_dev_build_preset(&session.project_dir, &preset_ref).await {
+                match crate::build::load_dev_build_preset(&preset_ref).await {
                     Ok((preset, _)) => preset.name,
                     Err(_) => infer_preset_name_from_ref(&preset_ref),
                 }

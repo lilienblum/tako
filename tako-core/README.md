@@ -20,4 +20,4 @@ cargo test -p tako-core
 
 ## Related Docs
 
-- `website/src/pages/docs/architecture.md` (component boundaries and data flow)
+- [`../PROTOCOL.md`](../PROTOCOL.md) (cross-component runtime contracts)

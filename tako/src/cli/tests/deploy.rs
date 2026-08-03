@@ -187,27 +187,3 @@ fn upgrade_command_parses() {
     let cli = Cli::try_parse_from(["tako", "upgrade"]).unwrap();
     assert!(matches!(cli.command, Some(Commands::Upgrade)));
 }
-
-#[test]
-fn deploy_rejects_removed_positional_dir_argument() {
-    let result = Cli::try_parse_from(["tako", "deploy", "apps/web"]);
-    match result {
-        Ok(_) => panic!("expected parse failure"),
-        Err(err) => assert!(
-            err.to_string().contains("unexpected argument 'apps/web'"),
-            "unexpected error: {err}"
-        ),
-    }
-}
-
-#[test]
-fn delete_rejects_removed_positional_dir_argument() {
-    let result = Cli::try_parse_from(["tako", "delete", "apps/web"]);
-    match result {
-        Ok(_) => panic!("expected parse failure"),
-        Err(err) => assert!(
-            err.to_string().contains("unexpected argument 'apps/web'"),
-            "unexpected error: {err}"
-        ),
-    }
-}

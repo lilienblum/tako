@@ -7,7 +7,7 @@ fn test_parse_global_vars() {
 API_URL = "https://api.example.com"
 DEBUG = "1"
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
     assert_eq!(
         config.vars.get("API_URL"),
         Some(&"https://api.example.com".to_string())
@@ -21,7 +21,7 @@ fn test_parse_single_route() {
 [envs.production]
 route = "api.example.com"
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
     let env = config.envs.get("production").unwrap();
     assert_eq!(env.route, Some("api.example.com".to_string()));
     assert_eq!(env.routes, None);
@@ -32,7 +32,7 @@ fn test_parse_env_without_routes_is_rejected() {
     let toml = r#"
 [envs.production]
 "#;
-    let err = Config::parse(toml).unwrap_err();
+    let err = TakoToml::parse(toml).unwrap_err();
     assert!(
         err.to_string()
             .contains("must define either 'route' or 'routes'")
@@ -44,7 +44,7 @@ fn test_parse_development_env_without_routes_is_allowed() {
     let toml = r#"
 [envs.development]
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
     let env = config.envs.get("development").unwrap();
     assert_eq!(env.route, None);
     assert_eq!(env.routes, None);
@@ -56,7 +56,7 @@ fn test_parse_env_with_empty_routes_is_rejected() {
 [envs.production]
 routes = []
 "#;
-    let err = Config::parse(toml).unwrap_err();
+    let err = TakoToml::parse(toml).unwrap_err();
     assert!(err.to_string().contains("routes"));
 }
 
@@ -66,7 +66,7 @@ fn test_parse_development_env_with_empty_routes_is_allowed() {
 [envs.development]
 routes = []
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
     let env = config.envs.get("development").unwrap();
     assert_eq!(env.route, None);
     assert_eq!(env.routes, Some(Vec::new()));
@@ -78,7 +78,7 @@ fn test_parse_multiple_routes() {
 [envs.production]
 routes = ["api.example.com", "*.api.example.com", "example.com/api/*"]
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
     let env = config.envs.get("production").unwrap();
     assert_eq!(env.route, None);
     assert_eq!(
@@ -98,7 +98,7 @@ fn test_parse_env_rejects_additional_keys() {
 route = "api.example.com"
 replicas = 3
 "#;
-    let err = Config::parse(toml).unwrap_err();
+    let err = TakoToml::parse(toml).unwrap_err();
     assert!(err.to_string().contains("unknown field"));
 }
 
@@ -110,7 +110,7 @@ route = "api.example.com"
 servers = ["la-prod", "nyc-prod"]
 idle_timeout = 600
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
     let env = config.envs.get("production").unwrap();
     assert_eq!(
         env.servers,
@@ -121,7 +121,7 @@ idle_timeout = 600
 
 #[test]
 fn test_default_env_idle_timeout_is_five_minutes() {
-    let config = Config::default();
+    let config = TakoToml::default();
     assert_eq!(config.get_idle_timeout("production"), 300);
 }
 
@@ -148,7 +148,7 @@ servers = ["prod-1"]
 [envs.staging]
 routes = ["staging.example.com", "*.staging.example.com"]
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
 
     assert_eq!(config.name, Some("my-api".to_string()));
     assert_eq!(config.main, Some("server/index.mjs".to_string()));

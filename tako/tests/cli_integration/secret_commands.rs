@@ -11,9 +11,8 @@ fn decrypt_test_secret(encrypted: &str, key_b64: &str) -> String {
     let combined = BASE64.decode(encrypted).expect("decode encrypted secret");
     let (nonce, ciphertext) = combined.split_at(12);
     let cipher = Aes256Gcm::new_from_slice(&key).expect("create cipher");
-    let plaintext = cipher
-        .decrypt(Nonce::from_slice(nonce), ciphertext)
-        .expect("decrypt secret");
+    let nonce = Nonce::try_from(nonce).expect("nonce contains 12 bytes");
+    let plaintext = cipher.decrypt(&nonce, ciphertext).expect("decrypt secret");
 
     String::from_utf8(plaintext).expect("secret is UTF-8")
 }

@@ -66,7 +66,7 @@ export default {
 
 ## Runtime state: `tako.sh` + `tako.d.ts`
 
-`tako generate` emits a project-local `tako.d.ts` that augments `tako.sh` with typed environment names, typed `tako.secrets` keys, typed `tako.storages` names, channel metadata, workflow metadata, and user-defined env vars on `process.env` / `import.meta.env`. Tako-owned runtime values are typed through `tako.sh` exports such as `tako.env`, `tako.build`, and `tako.dataDir`, not through generated env-var globals. It keeps an existing declaration in `app/`, `src/`, or the project root; otherwise it uses an existing legacy `tako.gen.ts` location, then `app/`, then `src/`, then the project root. `tako gen` and `tako g` are aliases. When `<app_root>/channels/` or `<app_root>/workflows/` already exists, it also scaffolds empty definition dirs/files so they default-export `defineChannel("<file-stem>")` or `defineWorkflow(...)` stubs. Generated channel stubs use the file stem as the initial name, but `tako generate` does not rewrite existing explicit names. Generated `TakoChannels` entries use the declared name as the key and `import("tako.sh").InferChannel<typeof import("./channels/<file>").default>` for params, messages, and transport metadata. App code imports `tako` from `tako.sh` for project runtime state:
+`tako generate` emits a project-local `tako.d.ts` that augments `tako.sh` with typed environment names, typed `tako.secrets` keys, typed `tako.storages` names, channel metadata, workflow metadata, and user-defined env vars on `process.env` / `import.meta.env`. Tako-owned runtime values are typed through `tako.sh` exports such as `tako.env`, `tako.build`, and `tako.dataDir`, not through generated env-var globals. It keeps an existing declaration in `app/`, `src/`, or the project root; otherwise it writes to the first existing `app/` or `src/` directory, falling back to the project root. `tako gen` and `tako g` are aliases. When `<app_root>/channels/` or `<app_root>/workflows/` already exists, it also scaffolds empty definition dirs/files so they default-export `defineChannel("<file-stem>")` or `defineWorkflow(...)` stubs. Generated channel stubs use the file stem as the initial name, but `tako generate` does not rewrite existing explicit names. Generated `TakoChannels` entries use the declared name as the key and `import("tako.sh").InferChannel<typeof import("./channels/<file>").default>` for params, messages, and transport metadata. App code imports `tako` from `tako.sh` for project runtime state:
 
 ```typescript
 import { tako } from "tako.sh";
@@ -440,7 +440,7 @@ import { defineWorkflow } from "tako.sh";
 export default defineWorkflow<{ userId: string; to: string }>("send-email", {
   retries: 3, // retries after first attempt (default 2)
   schedule: "0 9 * * *", // cron: daily at 9am (5-field)
-  worker: "email", // optional worker group; omitted means "default"
+  worker: "email", // metadata for SDK discovery; not production isolation yet
   local: true, // optional per-server local storage/cron for multi-server deploys
   concurrency: 10, // max parallel runs per worker (default 10)
   timeoutMs: 30_000, // handler timeout (default Infinity)
@@ -533,24 +533,25 @@ await signal("approval:order-abc", { approved: true });
 
 ### tako.toml configuration
 
+The parser accepts base settings, named groups, and per-server overrides, but the current production server supervises one scale-to-zero workflow lane per app with fixed runtime settings. These fields do not yet control production worker count, concurrency, group isolation, or per-server tuning. Do not present them as operational until the production supervisor consumes them.
+
 ```toml
-[workflows]                # base config inherited by every worker group
-workers = 1                # 0 = scale-to-zero (default)
+[workflows]                # parsed desired base settings
+workers = 1                # not applied by production supervision yet
 concurrency = 10
 
-[workflows.email]          # named worker-group override
+[workflows.email]          # parsed desired group override
 workers = 2
 
-[servers.lax.workflows]    # base override on one server
+[servers.lax.workflows]    # parsed desired server override
 concurrency = 20
 
 [servers.lax.workflows.email]
 workers = 4
 ```
 
-- `workers = 0` — scale-to-zero: worker starts when runnable work appears from enqueue, signal, cron, delayed retry/sleep, or lease reclaim, then exits after 300s idle.
-- Precedence for `worker: "email"`: `[servers.<name>.workflows.email]` > `[servers.<name>.workflows]` > `[workflows.email]` > `[workflows]` > defaults.
-- If `<app_root>/workflows/` exists but no workflow config exists, the app is implicitly scale-to-zero on every server.
+- The current production lane starts when runnable work appears and exits after 300 seconds idle.
+- The precedence model is parsed and tested, but it is not connected to production worker supervision.
 
 ## Common Mistakes
 

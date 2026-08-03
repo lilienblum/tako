@@ -9,7 +9,7 @@ fn test_get_routes_single() {
 [envs.production]
 route = "api.example.com"
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
     let routes = config.get_routes("production").unwrap();
     assert_eq!(routes, vec!["api.example.com"]);
 }
@@ -20,21 +20,21 @@ fn test_get_routes_multiple() {
 [envs.production]
 routes = ["api.example.com", "www.example.com"]
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
     let routes = config.get_routes("production").unwrap();
     assert_eq!(routes, vec!["api.example.com", "www.example.com"]);
 }
 
 #[test]
 fn test_get_routes_nonexistent_env() {
-    let config = Config::default();
+    let config = TakoToml::default();
     assert!(config.get_routes("production").is_none());
 }
 
 #[test]
 fn test_load_from_dir_requires_tako_toml() {
     let temp = tempfile::TempDir::new().unwrap();
-    let err = Config::load_from_dir(temp.path()).unwrap_err();
+    let err = TakoToml::load_from_dir(temp.path()).unwrap_err();
     assert!(err.to_string().contains("tako.toml"));
 }
 
@@ -50,7 +50,7 @@ route = "prod.example.com"
     )
     .unwrap();
 
-    let config = Config::load_from_dir(temp.path()).unwrap();
+    let config = TakoToml::load_from_dir(temp.path()).unwrap();
     assert!(config.name.is_none());
     assert_eq!(
         config
@@ -69,7 +69,7 @@ route = "prod.example.com"
 [envs.staging]
 route = "staging.example.com"
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
     let mut names = config.get_environment_names();
     names.sort();
     assert_eq!(names, vec!["production", "staging"]);
@@ -87,7 +87,7 @@ route = "prod.example.com"
 [envs.staging]
 route = "staging.example.com"
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
     let mut names: Vec<&str> = config.deployable_env_names().collect();
     names.sort_unstable();
     assert_eq!(names, vec!["production", "staging"]);

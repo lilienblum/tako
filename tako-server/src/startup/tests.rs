@@ -24,10 +24,8 @@ fn prepare_data_dir_creates_dir_with_group_traverse_mode() {
 }
 
 #[test]
-fn prepare_data_dir_upgrades_legacy_0o700_dir_to_0o710() {
-    // Regression: older installers left /opt/tako at mode 0o700, which
-    // blocks tako-app (a group-tako member) from traversing in. On the
-    // next server boot, prepare_data_dir must fix the mode in place.
+fn prepare_data_dir_sets_mode_on_existing_dir() {
+    // Existing directories need the same traversal permission as new ones.
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().join("tako-data");
     std::fs::create_dir(&dir).unwrap();

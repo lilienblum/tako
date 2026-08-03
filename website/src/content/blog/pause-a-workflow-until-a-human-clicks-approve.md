@@ -44,7 +44,7 @@ export default defineWorkflow<{ orderId: string }>("fulfill-order", {
 });
 ```
 
-The interesting line is `ctx.waitFor`. When the run hits it, the worker doesn't sit and spin — it serializes the run state, marks the row `pending` in the per-app SQLite queue, inserts an `event_waiters` row keyed by the event name, and exits the handler. If nothing else is in flight, the worker subprocess itself shuts down. Zero CPU, zero memory, zero open connections — just a row in a file at `{tako_data_dir}/apps/<app>/runs.db`.
+The interesting line is `ctx.waitFor`. When the run hits it, the worker doesn't sit and spin — it serializes the run state, marks the row `pending` in the app-local SQLite queue, inserts an `event_waiters` row keyed by the event name, and exits the handler. If nothing else is in flight, the worker subprocess itself shuts down. Zero CPU, zero memory, zero open connections — just a row in `data/tako/workflows.sqlite`.
 
 ## The signal
 
@@ -77,7 +77,7 @@ direction: right
 
 enq: "POST /orders\n(enqueue run)" {style.fill: "#9BC4B6"; style.font-size: 14}
 worker1: "Worker\nclaims, runs steps,\nhits waitFor" {style.fill: "#E88783"; style.font-size: 14}
-park: "Run parked\n(row in runs.db)" {style.fill: "#FFF9F4"; style.stroke: "#2F2A44"; style.font-size: 14}
+park: "Run parked\n(row in workflows.sqlite)" {style.fill: "#FFF9F4"; style.stroke: "#2F2A44"; style.font-size: 14}
 signal: "Admin clicks Approve\n→ signal()" {style.fill: "#9BC4B6"; style.font-size: 14}
 worker2: "Worker re-spawns,\nresumes after waitFor,\nships order" {style.fill: "#E88783"; style.font-size: 14}
 

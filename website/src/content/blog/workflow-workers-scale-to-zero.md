@@ -40,34 +40,20 @@ The same `WorkerSupervisor` runs workers under `tako dev` and in production. A u
 
 In dev, the worker is a subprocess of the embedded dev-server, and its stdout/stderr stream into your terminal alongside HTTP logs. When a bootstrap import throws, you see the stack trace immediately, then you see the next enqueue fail loudly with the same error. Fix the typo, save, re-run the enqueue — no restart needed.
 
-## Configuration
+## Current Production Configuration
 
-Scale-to-zero is the default. Nothing to configure for a typical app:
+Scale-to-zero is the current production behavior. Nothing is required beyond the app and its workflow files:
 
 ```toml
 # tako.toml
 name = "my-app"
 ```
 
-A workflow file in `src/workflows/` is enough — `tako dev` and `tako deploy` pick it up automatically. To pin workers up in production:
-
-```toml
-[workflows]
-workers = 1
-concurrency = 10
-```
-
-| Config         | Default | Meaning                                                                        |
-| -------------- | ------- | ------------------------------------------------------------------------------ |
-| `workers = 0`  | yes     | Scale-to-zero. Spawn on enqueue, exit after 5 min idle with zero claimed runs. |
-| `workers >= 1` | —       | Always-on. Respawn on any exit, including clean exits.                         |
-| `concurrency`  | 10      | Max parallel runs per worker.                                                  |
-
-See [`tako.toml`](/docs/tako-toml/) for the full config surface and [SPEC.md](/docs/) for the exact protocol.
+A workflow file in `src/workflows/` is enough — `tako dev` and `tako deploy` pick it up automatically. Production currently supervises one lane per app, starts it when work becomes runnable, and lets it exit after five idle minutes. The config parser accepts `workers`, `concurrency`, named groups, and per-server overrides, but those values do not yet control the production supervisor. See [`tako.toml`](/docs/tako-toml/) for that status and the [Workflows reference](/docs/workflows/) for execution guarantees.
 
 ## What the user sees
 
-Before the cooldown existed, a broken workflow meant silent accumulation. Rows pile up in `runs.db`. The supervisor tries to be helpful and respawns the worker. Your logs fill with identical stack traces. Eventually someone notices nothing's running.
+Before the cooldown existed, a broken workflow meant silent accumulation. Rows piled up in `workflows.sqlite`. The supervisor tried to be helpful and respawned the worker. Your logs filled with identical stack traces. Eventually someone noticed nothing was running.
 
 Now, the first enqueue after a cold crash returns `worker unhealthy: worker exited with status 1 after 84ms without claiming any runs`. That's the error your HTTP handler gets back from `sendEmail.enqueue()`, not a 500 from a crashed worker you never saw. The cooldown clears automatically once a worker claims a run — so a transient startup issue (a slow import, a cold filesystem) doesn't lock you out permanently.
 

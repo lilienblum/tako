@@ -13,7 +13,7 @@ servers = ["la-prod", "nyc-prod"]
 route = "staging.example.com"
 servers = ["staging-server"]
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
 
     let prod_servers = config.get_servers_for_env("production");
     assert_eq!(prod_servers.len(), 2);
@@ -39,7 +39,7 @@ idle_timeout = 300
 route = "staging.example.com"
 idle_timeout = 600
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
 
     assert_eq!(config.get_idle_timeout("production"), 300);
     assert_eq!(config.get_idle_timeout("staging"), 600);
@@ -57,7 +57,7 @@ servers = ["shared"]
 route = "staging.example.com"
 servers = ["shared"]
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
     assert_eq!(config.get_servers_for_env("production"), vec!["shared"]);
     assert_eq!(config.get_servers_for_env("staging"), vec!["shared"]);
 }
@@ -72,7 +72,7 @@ servers = ["shared"]
 [envs.development]
 servers = ["shared"]
 "#;
-    assert!(Config::parse(toml).is_ok());
+    assert!(TakoToml::parse(toml).is_ok());
 }
 
 #[test]
@@ -82,5 +82,5 @@ fn test_env_servers_reject_invalid_server_name() {
 route = "api.example.com"
 servers = ["INVALID_NAME"]
 "#;
-    assert!(Config::parse(toml).is_err());
+    assert!(TakoToml::parse(toml).is_err());
 }

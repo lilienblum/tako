@@ -9,7 +9,7 @@ image: c5d323f04183
 
 But a lot of new apps are not Ruby apps. They are TypeScript apps running on Bun or Node, maybe with a little Next.js, Hono, TanStack Start, or Vite SSR around the edges. When those apps need background work, the usual answer is to rebuild the Sidekiq shape with Redis, a queue library, a worker process, a scheduler, retry rules, a dashboard, and deploy glue.
 
-Tako takes a different path. [Tako workflows](/blog/durable-workflows-are-here/) put durable TypeScript background jobs inside the same platform that already deploys your app: per-app queue state, retries, step checkpoints, cron, sleeps, signals, named worker groups, logs, secrets, and workers that can scale to zero on your own VPS.
+Tako takes a different path. [Tako workflows](/blog/durable-workflows-are-here/) put durable TypeScript background jobs inside the same platform that already deploys your app: per-app queue state, retries, step checkpoints, cron, sleeps, signals, logs, secrets, and a worker lane that can scale to zero on your own VPS.
 
 ## Sidekiq is a queue; Tako is app infrastructure
 
@@ -21,15 +21,15 @@ In a TypeScript app, the same shape usually turns into a stack:
 
 | Need             | Sidekiq-style queue stack                                                                       | Tako workflow                                            |
 | ---------------- | ----------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
-| Queue storage    | Redis-compatible service                                                                        | Per-app SQLite at `{tako_data_dir}/apps/<app>/runs.db`   |
+| Queue storage    | Redis-compatible service                                                                        | App-local SQLite at `data/tako/workflows.sqlite`         |
 | Job definition   | Ruby class with `perform`                                                                       | `workflows/*.ts` with `defineWorkflow`                   |
 | Enqueue          | `perform_async`, `perform_in`, `perform_at`                                                     | Typed `.enqueue(payload, opts?)`                         |
 | Retries          | [Job retry policy](https://github.com/sidekiq/sidekiq/wiki/Error-Handling), Retry set, Dead set | Run-level and step-level retries, terminal `dead` status |
 | Progress         | Job code must persist its own progress, or use iterable jobs for cursor-style work              | `ctx.run` stores named step results automatically        |
-| Worker isolation | Separate Sidekiq process, queues, capsules, or more processes                                   | Named worker groups in `tako.toml`                       |
+| Worker isolation | Separate Sidekiq process, queues, capsules, or more processes                                   | One separate workflow process today                      |
 | Cron             | Enterprise periodic jobs or third-party scheduler gems                                          | `schedule` on `defineWorkflow`                           |
 | Deployment       | App deploy plus Sidekiq process management plus queue backend                                   | Same `tako deploy` as the HTTP app                       |
-| Idle cost        | Worker stays up unless your process manager stops it                                            | `workers = 0` spawns on enqueue and idles out            |
+| Idle cost        | Worker stays up unless your process manager stops it                                            | Current lane spawns on demand and idles out              |
 
 The important difference is ownership. In a Sidekiq-style stack, the queue backend is a shared external component. Your app talks to Redis; worker processes talk to Redis; schedulers talk to Redis; monitoring talks to Redis. In Tako, workflow state belongs to `tako-server`. App code and worker code speak over the internal Unix socket, and the SDK never opens the queue database directly.
 
@@ -52,7 +52,7 @@ tako: "Tako workflows" {
   direction: down
   app2: "HTTP app"
   server: "tako-server"
-  db: "runs.db"
+  db: "data/tako/workflows.sqlite"
   worker2: "workflow worker"
 
   app2 -> server: "unix socket"
@@ -116,43 +116,13 @@ This is closer to durable workflow engines than to a raw job queue. Sidekiq has 
 
 The contract stays honest. Tako is still at-least-once. If a worker dies after a side effect succeeds but before the step-save RPC completes, the step can run again. Use idempotency keys, upserts, and stable business identifiers. The difference is that the happy path for durable progress is built into the workflow context, not hand-rolled for every job.
 
-## Workers should have lanes, not traffic jams
+## The current worker lane
 
 Sidekiq has queues, concurrency settings, and newer capsules for controlling execution. Those are real tools. If you run a mature Sidekiq installation, you probably already separate critical jobs from slow jobs so password resets do not sit behind thumbnail generation.
 
-Tako has the same basic need, but the config lives with the app:
+Tako currently supervises one workflow lane per app. It is separate from HTTP instances and scales to zero, but every workflow shares that production lane. The SDK and config parser already model named groups and tuning fields; the production supervisor does not consume them yet. Do not plan capacity or isolation around those settings until that wiring ships. The current status is in the [`tako.toml` reference](/docs/tako-toml/), and the production lifecycle is covered in [deployment docs](/docs/deployment/).
 
-```toml
-[workflows]
-workers = 0
-concurrency = 10
-
-[workflows.email]
-workers = 1
-concurrency = 20
-
-[workflows.media]
-workers = 0
-concurrency = 4
-```
-
-Then assign a workflow to a group:
-
-```ts
-export default defineWorkflow("process-image", {
-  worker: "media",
-  retries: 4,
-  handler: async (payload, ctx) => {
-    const original = await ctx.run("download", () => storage.get(payload.key));
-    const thumb = await ctx.run("resize", () => resize(original));
-    await ctx.run("upload", () => storage.put(`thumb/${payload.key}`, thumb));
-  },
-});
-```
-
-The email group can stay warm. The media group can scale to zero until the first image job lands. Each group gets its own worker subprocess, and server-specific overrides can tune the heavy group on a bigger machine. The full precedence rules are in the [`tako.toml` reference](/docs/tako-toml/), and the production lifecycle is covered in [deployment docs](/docs/deployment/).
-
-This matters because most background job systems eventually become scheduling systems for scarce resources. Some work is latency-sensitive. Some work is CPU-heavy. Some work needs lots of outbound network concurrency. Putting every job into one general worker pool is simple until it is not.
+This matters because most background job systems eventually become scheduling systems for scarce resources. Some work is latency-sensitive. Some work is CPU-heavy. Some work needs lots of outbound network concurrency. Today, Tako users should treat the workflow process as one shared resource and enforce application-level limits where needed.
 
 ## When Sidekiq is still the right answer
 

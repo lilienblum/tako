@@ -14,7 +14,7 @@ DATABASE_URL = "postgres://prod"
 [vars.staging]
 DATABASE_URL = "postgres://staging"
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
 
     // Global var
     assert_eq!(
@@ -46,7 +46,7 @@ PUBLIC = true
 [vars.production]
 WORKERS = 2
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
 
     assert_eq!(config.vars.get("APP_ID"), Some(&"3609852".to_string()));
     assert_eq!(config.vars.get("PUBLIC"), Some(&"true".to_string()));
@@ -64,7 +64,7 @@ API_URL = "https://api.example.com"
 [vars.production]
 DATABASE_URL = "postgres://prod"
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
 
     let merged = config.get_merged_vars("production");
     assert_eq!(
@@ -88,7 +88,7 @@ API_URL = "https://api.example.com"
 ENV = "custom-production"
 DATABASE_URL = "postgres://prod"
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
 
     let merged = config.get_merged_vars("production");
     assert!(!merged.contains_key("ENV"));
@@ -108,7 +108,7 @@ fn test_get_merged_vars_nonexistent_env() {
 [vars]
 API_URL = "https://api.example.com"
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
 
     let merged = config.get_merged_vars("nonexistent");
     assert_eq!(

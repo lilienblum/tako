@@ -1,14 +1,10 @@
 use std::path::Path;
 
-pub(super) const RUNTIME_VERSION_OUTPUT_FILE: &str = ".tako-runtime-version";
-
 pub(super) fn save_runtime_version_to_manifest(
     workspace: &Path,
     runtime_version: &str,
 ) -> Result<(), String> {
-    save_manifest_version_field(workspace, "runtime_version", runtime_version)?;
-    let _ = std::fs::remove_file(workspace.join(RUNTIME_VERSION_OUTPUT_FILE));
-    Ok(())
+    save_manifest_version_field(workspace, "runtime_version", runtime_version)
 }
 
 pub(super) fn save_package_manager_version_to_manifest(

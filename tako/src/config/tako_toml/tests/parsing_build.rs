@@ -7,7 +7,7 @@ name = "my-app"
 main = "server/index.mjs"
 preset = "bun"
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
     assert_eq!(config.name, Some("my-app".to_string()));
     assert_eq!(config.main, Some("server/index.mjs".to_string()));
     assert_eq!(config.preset, Some("bun".to_string()));
@@ -18,7 +18,7 @@ fn test_parse_dev_command() {
     let toml = r#"
 dev = ["vite", "dev"]
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
     assert_eq!(config.dev, vec!["vite".to_string(), "dev".to_string()]);
 }
 
@@ -27,7 +27,7 @@ fn test_parse_start_command() {
     let toml = r#"
 start = ["./app", "--port-from-tako"]
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
     assert_eq!(
         config.start,
         vec!["./app".to_string(), "--port-from-tako".to_string()]
@@ -39,7 +39,7 @@ fn test_parse_start_command_rejects_empty_array() {
     let toml = r#"
 start = []
 "#;
-    let err = Config::parse(toml).unwrap_err();
+    let err = TakoToml::parse(toml).unwrap_err();
     assert!(
         err.to_string()
             .contains("'start' must be a non-empty array")
@@ -52,7 +52,7 @@ fn test_parse_container_release_file() {
 runtime = "go"
 container = "Dockerfile"
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
     assert_eq!(config.container, Some("Dockerfile".to_string()));
 }
 
@@ -66,7 +66,7 @@ route = "example.com"
 servers = ["prod"]
 source_ip = "cloudflare-proxy"
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
     assert_eq!(
         config.envs["production"].source_ip,
         Some(tako_core::SourceIpMode::CloudflareProxy)
@@ -87,7 +87,7 @@ route = "example.com"
 servers = ["prod"]
 source_ip = "trusted-proxy"
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
     assert_eq!(
         config.envs["production"].source_ip,
         Some(tako_core::SourceIpMode::TrustedProxy)
@@ -106,7 +106,7 @@ name = "app"
 [envs.production]
 route = "example.com"
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
     assert_eq!(
         config.get_source_ip_mode("production"),
         tako_core::SourceIpMode::Auto
@@ -123,7 +123,7 @@ route = "example.com"
 source_ip = "unknown"
 "#;
 
-    let err = Config::parse(toml).unwrap_err();
+    let err = TakoToml::parse(toml).unwrap_err();
     assert!(err.to_string().contains("unknown"));
 }
 
@@ -136,7 +136,7 @@ assets = ["public-assets", "shared/images"]
 include = [".output/**", "dist/**"]
 exclude = ["**/*.map"]
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
     assert_eq!(
         config.build.include,
         vec![".output/**".to_string(), "dist/**".to_string()]
@@ -161,7 +161,7 @@ cwd = "frontend"
 install = "bun install"
 run = "bun run build"
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
     assert_eq!(config.build_stages.len(), 2);
     assert_eq!(config.build_stages[0].name, None);
     assert_eq!(config.build_stages[0].cwd, None);
@@ -196,7 +196,7 @@ install = "bun install"
 run = "bun run build"
 exclude = ["**/*.map", "node_modules/**"]
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
     assert_eq!(config.build_stages.len(), 2);
     assert_eq!(
         config.build_stages[0].exclude,
@@ -215,7 +215,7 @@ fn test_build_stages_exclude_rejects_absolute_paths() {
 run = "cargo build"
 exclude = ["/tmp/out/**"]
 "#;
-    let err = Config::parse(toml).unwrap_err();
+    let err = TakoToml::parse(toml).unwrap_err();
     assert!(
         err.to_string()
             .contains("build_stages[0].exclude entry '/tmp/out/**' must be relative")
@@ -229,7 +229,7 @@ fn test_build_stages_exclude_rejects_parent_traversal() {
 run = "cargo build"
 exclude = ["../secret/**"]
 "#;
-    let err = Config::parse(toml).unwrap_err();
+    let err = TakoToml::parse(toml).unwrap_err();
     assert!(
         err.to_string()
             .contains("build_stages[0].exclude entry '../secret/**' must not contain '..'")
@@ -245,7 +245,7 @@ include = ["dist/**"]
 [[build_stages]]
 run = "bun run build"
 "#;
-    let err = Config::parse(toml).unwrap_err();
+    let err = TakoToml::parse(toml).unwrap_err();
     assert!(err.to_string().contains("per-stage exclude"));
 }
 
@@ -258,7 +258,7 @@ exclude = ["**/*.map"]
 [[build_stages]]
 run = "bun run build"
 "#;
-    let err = Config::parse(toml).unwrap_err();
+    let err = TakoToml::parse(toml).unwrap_err();
     assert!(err.to_string().contains("per-stage exclude"));
 }
 
@@ -268,7 +268,7 @@ fn test_parse_build_stages_requires_run() {
 [[build_stages]]
 name = "frontend-assets"
 "#;
-    let err = Config::parse(toml).unwrap_err();
+    let err = TakoToml::parse(toml).unwrap_err();
     assert!(
         err.to_string()
             .contains("'build_stages[0].run' is required")
@@ -281,7 +281,7 @@ fn test_parse_build_stages_rejects_empty_run() {
 [[build_stages]]
 run = "   "
 "#;
-    let err = Config::parse(toml).unwrap_err();
+    let err = TakoToml::parse(toml).unwrap_err();
     assert!(
         err.to_string()
             .contains("'build_stages[0].run' cannot be empty")
@@ -293,7 +293,7 @@ fn test_parse_build_stages_rejects_non_table_entries() {
     let toml = r#"
 build_stages = ["bun run build"]
 "#;
-    let err = Config::parse(toml).unwrap_err();
+    let err = TakoToml::parse(toml).unwrap_err();
     assert!(
         err.to_string()
             .contains("'build_stages[0]' must be a table")
@@ -307,7 +307,7 @@ fn test_parse_build_stages_rejects_unknown_keys() {
 command = "bun run build"
 run = "bun run build"
 "#;
-    let err = Config::parse(toml).unwrap_err();
+    let err = TakoToml::parse(toml).unwrap_err();
     assert!(
         err.to_string()
             .contains("Unknown key 'build_stages[0].command'")
@@ -323,7 +323,7 @@ run = "bun run build"
 [[build_stages]]
 run = "bun run other"
 "#;
-    let err = Config::parse(toml).unwrap_err();
+    let err = TakoToml::parse(toml).unwrap_err();
     assert!(err.to_string().contains("mutually exclusive"));
 }
 
@@ -332,7 +332,7 @@ fn test_parse_runtime() {
     let toml = r#"
 runtime = "node"
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
     assert_eq!(config.runtime, Some("node".to_string()));
     assert_eq!(config.runtime_version_pin, None);
 }
@@ -342,7 +342,7 @@ fn test_parse_runtime_with_version_pin() {
     let toml = r#"
 runtime = "bun@1.2.3"
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
     assert_eq!(config.runtime, Some("bun".to_string()));
     assert_eq!(config.runtime_version_pin, Some("1.2.3".to_string()));
 }
@@ -352,7 +352,7 @@ fn test_parse_runtime_version_pin_defaults_to_none() {
     let toml = r#"
 runtime = "bun"
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
     assert!(config.runtime_version_pin.is_none());
 }
 
@@ -361,13 +361,13 @@ fn test_parse_rejects_unknown_top_level_keys() {
     let top_level_adapter = r#"
 adapter = "node"
 "#;
-    let err = Config::parse(top_level_adapter).unwrap_err();
+    let err = TakoToml::parse(top_level_adapter).unwrap_err();
     assert!(err.to_string().contains("Unknown key 'adapter'"));
 
     let top_level_dist = r#"
 dist = ".tako/dist"
 "#;
-    let err = Config::parse(top_level_dist).unwrap_err();
+    let err = TakoToml::parse(top_level_dist).unwrap_err();
     assert!(err.to_string().contains("Unknown key 'dist'"));
 
     // `servers` is now a valid top-level key (hosts `[servers.X.workflows]`).
@@ -375,7 +375,7 @@ dist = ".tako/dist"
     let top_level_broker = r#"
 broker = "redis"
 "#;
-    let err = Config::parse(top_level_broker).unwrap_err();
+    let err = TakoToml::parse(top_level_broker).unwrap_err();
     assert!(err.to_string().contains("Unknown key 'broker'"));
 }
 
@@ -384,7 +384,7 @@ fn test_parse_accepts_top_level_assets() {
     let toml = r#"
 assets = ["dist/client"]
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
     assert_eq!(config.assets, vec!["dist/client".to_string()]);
 }
 
@@ -393,7 +393,7 @@ fn test_parse_accepts_top_level_preset() {
     let toml = r#"
 preset = "tanstack-start"
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
     assert_eq!(config.preset, Some("tanstack-start".to_string()));
 }
 
@@ -403,7 +403,7 @@ fn test_parse_rejects_unknown_build_keys() {
 [build]
 adapter = "bun"
 "#;
-    let err = Config::parse(build_adapter).unwrap_err();
+    let err = TakoToml::parse(build_adapter).unwrap_err();
     assert!(err.to_string().contains("Unknown key 'build.adapter'"));
 
     // preset is now top-level, not under [build]
@@ -411,6 +411,6 @@ adapter = "bun"
 [build]
 preset = "bun"
 "#;
-    let err = Config::parse(build_preset).unwrap_err();
+    let err = TakoToml::parse(build_preset).unwrap_err();
     assert!(err.to_string().contains("Unknown key 'build.preset'"));
 }

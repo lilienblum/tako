@@ -14,6 +14,8 @@ Astro static site deployed with Cloudflare Workers static assets.
 - `/docs/deployment/`: deployment guide
 - `/docs/troubleshooting/`: troubleshooting runbook
 - `/docs/how-tako-works/`: how Tako works overview
+- `/docs/channels/`: durable SSE and WebSocket channels
+- `/docs/workflows/`: durable workflow authoring and execution guarantees
 - `/install.sh`: `301` redirect to GitHub-hosted POSIX `sh` installer script for `tako`
 - `/install-server.sh`: `301` redirect to GitHub-hosted POSIX `sh` installer script for `tako-server`
 - `/server-install.sh`: alias for `/install-server.sh` (same redirect target)

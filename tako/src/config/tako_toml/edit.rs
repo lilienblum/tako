@@ -1,10 +1,10 @@
-use super::schema::Config;
 use super::schema::StorageResourceConfig;
+use super::schema::TakoToml;
 use crate::config::error::{ConfigError, Result};
 use std::fs;
 use std::path::Path;
 
-impl Config {
+impl TakoToml {
     /// Add a server to `[envs.<name>].servers` in `tako.toml` under the given directory.
     pub fn upsert_server_env_in_dir<P: AsRef<Path>>(
         dir: P,

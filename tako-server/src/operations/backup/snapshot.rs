@@ -407,7 +407,7 @@ mod tests {
     }
 
     #[test]
-    fn restore_removes_transient_channel_replay_store_from_old_archives() {
+    fn restore_excludes_transient_tako_sqlite_stores() {
         let temp = TempDir::new().unwrap();
         let extracted = temp.path().join("extracted");
         let data_root = temp.path().join("apps/demo/production/data");

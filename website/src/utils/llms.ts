@@ -58,6 +58,16 @@ export const llmsCoreSections: LlmsSection[] = [
         url: "/docs/deployment/",
         description: "Server setup, deploy flow, scaling, secrets, and production operations.",
       },
+      {
+        title: "Channels",
+        url: "/docs/channels/",
+        description: "Durable SSE and WebSocket streams, auth, replay, and browser clients.",
+      },
+      {
+        title: "Workflows",
+        url: "/docs/workflows/",
+        description: "Durable runs, checkpoints, retries, signals, schedules, and workers.",
+      },
     ],
   },
   {

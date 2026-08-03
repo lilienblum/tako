@@ -31,13 +31,13 @@ export default defineWorkflow("fulfill-order", {
 });
 ```
 
-Each step is one row in a per-app SQLite queue at `{tako_data_dir}/apps/<app>/runs.db` with first-write-wins semantics. Retries are automatic — exponential backoff with jitter, capped at an hour, overridable per workflow (`retries: 4` means retry 4 times = 5 total attempts). The same contract every durable engine gives you: at-least-once, so make step bodies idempotent. See [the SPEC](/docs/) for the full details.
+Each run and completed step is stored in the app's workflow database with first-write-wins checkpoint semantics. Retries use exponential backoff with jitter, capped at an hour, and can be overridden per workflow (`retries: 4` means four retries after the first attempt). The execution contract is at least once, so step bodies must be idempotent. See the [Workflows reference](/docs/workflows/) for the full details.
 
 ## Sleep for days, wait for signals
 
 Two primitives turn "workflow" into "long-running business process."
 
-`ctx.sleep(3 * 24 * 3600 * 1000)` pauses the run for three days. Short waits run inline; longer ones park the run — the worker exits, the row goes back to `pending` with a wake-up time, and the supervisor resumes on schedule. Crash-safe across reboots.
+`ctx.sleep("three-days", 3 * 24 * 3600 * 1000)` pauses the run for three days. Short waits run inline; longer ones park the run. The worker exits, the row goes back to `pending` with a wake-up time, and the supervisor resumes on schedule. The wait survives restarts.
 
 `ctx.waitFor(name, { timeout })` parks the run waiting for a named event, then anywhere else in your code, `signal(name, payload)` wakes it:
 
@@ -79,7 +79,7 @@ direction: right
 
 enq: Enqueue {style.fill: "#9BC4B6"; style.font-size: 16}
 server: tako-server {style.fill: "#E88783"; style.font-size: 16}
-db: runs.db {style.fill: "#FFF9F4"; style.stroke: "#2F2A44"; style.font-size: 16}
+db: workflows.sqlite {style.fill: "#FFF9F4"; style.stroke: "#2F2A44"; style.font-size: 16}
 worker: Worker process {style.fill: "#E88783"; style.font-size: 16}
 
 enq -> server: "unix socket"
@@ -89,13 +89,7 @@ worker -> server: "claim / save step / complete"
 server -> db: "persist"
 ```
 
-The worker is a separate process so heavy deps — image libs, ML bindings — don't bloat your HTTP instances. Workers default to scale-to-zero: [same idea as your app](/blog/scale-to-zero-without-containers/), the first enqueue or cron tick spins one up, an idle worker exits after five minutes. One knob in `tako.toml` pins them up:
-
-```toml
-[workflows]
-workers = 1
-concurrency = 10
-```
+The worker is a separate process so heavy deps — image libs, ML bindings — don't bloat your HTTP instances. The current production supervisor runs one scale-to-zero lane per app: [same idea as your app](/blog/scale-to-zero-without-containers/), the first enqueue or cron tick spins it up, and an idle worker exits after five minutes. `tako.toml` already parses worker-count, concurrency, and group settings, but production supervision does not consume them yet. See the [current workflow reference](/docs/workflows/) before relying on worker tuning.
 
 ## Same server, same deploy
 

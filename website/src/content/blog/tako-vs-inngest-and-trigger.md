@@ -35,7 +35,7 @@ If you want a hosted workflow platform with dashboards, observability tooling, a
 
 Inngest and Trigger.dev are workflow platforms. Even self-hosted, you're running _another system_ next to your app: Inngest self-hosting is a multi-service install (event API, runner, executor, state store, dashboard); Trigger.dev's self-host is Postgres + Redis + web + workers wired together with Docker Compose or a Helm chart. That's fine — it's what a full workflow platform requires.
 
-Tako's workflow engine lives inside `tako-server`, the same process that already runs your app's HTTP proxy, TLS, and scale-to-zero supervision. The queue is a single SQLite file at `{tako_data_dir}/apps/<app>/runs.db`. The worker is a subprocess. The protocol is a unix socket. There is no second thing to deploy, monitor, or upgrade — [`tako deploy`](/blog/what-happens-when-you-run-tako-deploy/) ships your HTTP handlers and your `workflows/*.ts` files in the same release.
+Tako's workflow engine lives inside `tako-server`, the same process that already runs your app's HTTP proxy, TLS, and scale-to-zero supervision. Single-server state lives in the app's `data/tako/workflows.sqlite` file. The worker is a subprocess. The protocol is a Unix socket. There is no second thing to deploy, monitor, or upgrade — [`tako deploy`](/blog/what-happens-when-you-run-tako-deploy/) ships your HTTP handlers and your `workflows/*.ts` files in the same release.
 
 ```d2
 direction: right
@@ -59,7 +59,7 @@ tako: Tako {
 
   app: Your app
   server: tako-server
-  db: runs.db (SQLite)
+  db: workflows.sqlite
   worker: Worker subprocess
 
   app -> server: unix socket
@@ -76,7 +76,7 @@ Tako's workflow engine runs on the VPS you were going to pay for anyway. The mar
 
 ### Same primitives, smaller surface
 
-We kept the API to the handful of things that actually matter: [`ctx.run`, `ctx.sleep`, `ctx.waitFor`, `signal`, and cron via `defineWorkflow`'s `schedule` option](/docs/). That's enough to express retries, long waits, human approvals, fan-out, and scheduled jobs. You can read the full contract in [SPEC.md](https://github.com/tako-sh/tako) in one sitting.
+We kept the API to the handful of things that actually matter: [`ctx.run`, `ctx.sleep`, `ctx.waitFor`, `signal`, and cron via `defineWorkflow`'s `schedule` option](/docs/workflows/). That's enough to express retries, long waits, human approvals, fan-out, and scheduled jobs. The [Workflows reference](/docs/workflows/) documents the full contract.
 
 ## Different ambition
 

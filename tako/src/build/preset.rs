@@ -33,7 +33,7 @@ pub struct PresetDefinition {
 /// App preset providing entrypoint and asset defaults.
 /// Loaded from `presets/<group>.toml` (fetched from GitHub, cached locally).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AppPreset {
+pub struct BuildPreset {
     pub name: String,
     #[serde(default)]
     pub main: Option<String>,
@@ -47,24 +47,21 @@ pub struct AppPreset {
     /// the preset defaults above. Missing fields in an override fall through
     /// to the preset default.
     #[serde(default)]
-    pub runtime_overrides: HashMap<String, AppPresetRuntimeOverride>,
+    pub runtime_overrides: HashMap<String, BuildPresetRuntimeOverride>,
 }
 
 /// Per-runtime preset override. Parsed from `[<preset>.<runtime>]` sub-tables.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AppPresetRuntimeOverride {
+pub struct BuildPresetRuntimeOverride {
     #[serde(default)]
     pub dev: Vec<String>,
 }
-
-/// Backward-compatible alias.
-pub type BuildPreset = AppPreset;
 
 const KNOWN_PRESET_FIELDS: &[&str] = &["name", "main", "assets", "dev"];
 const KNOWN_RUNTIME_OVERRIDE_FIELDS: &[&str] = &["dev"];
 
 #[derive(Debug, Clone, Deserialize)]
-struct AppPresetRaw {
+struct BuildPresetRaw {
     #[serde(default)]
     name: Option<String>,
     #[serde(default)]
@@ -227,14 +224,17 @@ fn parse_group_preset_content(
     parse_and_validate_preset(&preset_content, preset_name)
 }
 
-pub fn parse_and_validate_preset(content: &str, inferred_name: &str) -> Result<AppPreset, String> {
+pub fn parse_and_validate_preset(
+    content: &str,
+    inferred_name: &str,
+) -> Result<BuildPreset, String> {
     let value: toml::Value =
         toml::from_str(content).map_err(|e| format!("Failed to parse preset TOML: {e}"))?;
     let table = value.as_table().ok_or_else(|| {
         "Preset TOML must be a table of key/value pairs at the top level.".to_string()
     })?;
 
-    let mut runtime_overrides: HashMap<String, AppPresetRuntimeOverride> = HashMap::new();
+    let mut runtime_overrides: HashMap<String, BuildPresetRuntimeOverride> = HashMap::new();
     for (key, child) in table {
         if KNOWN_PRESET_FIELDS.contains(&key.as_str()) {
             continue;
@@ -264,7 +264,7 @@ pub fn parse_and_validate_preset(content: &str, inferred_name: &str) -> Result<A
         );
     }
 
-    let raw: AppPresetRaw =
+    let raw: BuildPresetRaw =
         toml::from_str(content).map_err(|e| format!("Failed to parse preset TOML: {e}"))?;
 
     let name = raw
@@ -279,7 +279,7 @@ pub fn parse_and_validate_preset(content: &str, inferred_name: &str) -> Result<A
         );
     }
 
-    Ok(AppPreset {
+    Ok(BuildPreset {
         name,
         main: raw.main,
         assets: raw.assets,
@@ -289,7 +289,7 @@ pub fn parse_and_validate_preset(content: &str, inferred_name: &str) -> Result<A
 }
 
 pub fn apply_adapter_base_runtime_defaults(
-    preset: &mut AppPreset,
+    preset: &mut BuildPreset,
     adapter: BuildAdapter,
     plugin_ctx: Option<&tako_runtime::PluginContext>,
 ) -> Result<(), String> {
@@ -314,7 +314,7 @@ pub fn apply_adapter_base_runtime_defaults(
 mod tests {
     use super::*;
 
-    fn parse_preset(raw: &str) -> Result<AppPreset, String> {
+    fn parse_preset(raw: &str) -> Result<BuildPreset, String> {
         parse_and_validate_preset(raw, "bun")
     }
 

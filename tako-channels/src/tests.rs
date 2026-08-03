@@ -449,11 +449,8 @@ fn multiprocess_child_writer() {
     }
 }
 
-/// Gating test for the turso migration: during a zero-downtime server
-/// reload the old and new tako-server processes hold the same channel DB
-/// simultaneously and both write. Every write from both processes must be
-/// visible and persisted — this is the scenario that broke turso 0.6.1
-/// (process-exclusive file lock) and must keep working.
+/// During a zero-downtime reload, both server processes can write to the same
+/// channel database. Every write must remain visible and persisted.
 #[test]
 fn channel_store_supports_two_processes_writing_interleaved() {
     let temp = tempfile::TempDir::new().unwrap();
@@ -486,10 +483,7 @@ fn channel_store_supports_two_processes_writing_interleaved() {
     assert_eq!(store.read_after("mp", None, 100).unwrap().len(), 21);
 }
 
-/// Gating test for the turso migration: in turso 0.6.1 a write issued on a
-/// connection holding an unconsumed read cursor returned Ok but silently
-/// never persisted. Guard against that regressing in future turso upgrades:
-/// the write must either persist or fail loudly.
+/// A write issued while a read cursor is live must either persist or fail.
 #[test]
 fn write_with_live_read_cursor_persists() {
     let temp = tempfile::TempDir::new().unwrap();

@@ -165,10 +165,7 @@ fn tanstack_start_bun_dev_resolves_to_bunx_bun_vite_dev_end_to_end() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let preset_ref = resolve_dev_preset_ref(project.path(), &cfg).unwrap();
     let (preset, _src) = runtime
-        .block_on(crate::build::load_dev_build_preset(
-            project.path(),
-            &preset_ref,
-        ))
+        .block_on(crate::build::load_dev_build_preset(&preset_ref))
         .unwrap();
 
     let adapter = resolve_effective_dev_build_adapter(project.path(), &cfg, &preset_ref).unwrap();

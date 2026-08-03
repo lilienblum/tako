@@ -374,7 +374,7 @@ async fn ensure_schema(conn: &Connection) -> Result<(), String> {
     if !expected.iter().all(|col| columns.iter().any(|c| c == col)) {
         conn.execute_batch("DROP TABLE apps;")
             .await
-            .map_err(|e| format!("drop outdated apps table: {e}"))?;
+            .map_err(|e| format!("drop mismatched apps table: {e}"))?;
         return create_apps_table(conn).await;
     }
 

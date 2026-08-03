@@ -6,7 +6,7 @@ pub const DEFAULT_JS_APP_ROOT: &str = "src";
 
 /// Root configuration from tako.toml
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-pub struct Config {
+pub struct TakoToml {
     /// Application name (required; stable identity for deploy paths and hostnames)
     pub name: Option<String>,
 
@@ -90,9 +90,6 @@ pub struct Config {
     #[serde(default)]
     pub images: ImagesConfig,
 }
-
-/// Backward-compatible alias.
-pub type TakoToml = Config;
 
 /// Build configuration from [build].
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]

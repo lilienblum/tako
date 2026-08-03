@@ -74,7 +74,7 @@ fn test_cannot_have_both_route_and_routes() {
 route = "api.example.com"
 routes = ["staging.example.com"]
 "#;
-    assert!(Config::parse(toml).is_err());
+    assert!(TakoToml::parse(toml).is_err());
 }
 
 #[test]
@@ -84,7 +84,7 @@ fn test_validate_idle_timeout_cannot_be_zero() {
 route = "api.example.com"
 idle_timeout = 0
 "#;
-    assert!(Config::parse(toml).is_err());
+    assert!(TakoToml::parse(toml).is_err());
 }
 
 #[test]
@@ -96,7 +96,7 @@ name = "app"
 route = "api.example.com"
 ssl = "cloudflare"
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
 
     assert_eq!(
         config.get_ssl_provider("production"),
@@ -113,7 +113,7 @@ name = "app"
 route = "api.example.com"
 ssl = "self-signed"
 "#;
-    let err = Config::parse(toml).unwrap_err();
+    let err = TakoToml::parse(toml).unwrap_err();
     assert!(err.to_string().contains("unknown variant"));
 }
 
@@ -122,7 +122,7 @@ fn test_validate_assets_rejects_absolute_path() {
     let toml = r#"
 assets = ["/tmp/assets"]
 "#;
-    let err = Config::parse(toml).unwrap_err();
+    let err = TakoToml::parse(toml).unwrap_err();
     assert!(
         err.to_string()
             .contains("assets entry '/tmp/assets' must be relative to project root")
@@ -134,7 +134,7 @@ fn test_validate_assets_rejects_parent_directory_reference() {
     let toml = r#"
 assets = ["../shared-assets"]
 "#;
-    let err = Config::parse(toml).unwrap_err();
+    let err = TakoToml::parse(toml).unwrap_err();
     assert!(
         err.to_string()
             .contains("assets entry '../shared-assets' must not contain '..'")
@@ -147,7 +147,7 @@ fn test_validate_build_globs_reject_invalid_paths() {
 [build]
 include = ["/tmp/out/**"]
 "#;
-    let err = Config::parse(absolute).unwrap_err();
+    let err = TakoToml::parse(absolute).unwrap_err();
     assert!(
         err.to_string()
             .contains("build.include entry '/tmp/out/**' must be relative to project root")
@@ -157,7 +157,7 @@ include = ["/tmp/out/**"]
 [build]
 exclude = ["../secret/**"]
 "#;
-    let err = Config::parse(parent).unwrap_err();
+    let err = TakoToml::parse(parent).unwrap_err();
     assert!(
         err.to_string()
             .contains("build.exclude entry '../secret/**' must not contain '..'")
@@ -169,13 +169,13 @@ fn test_validate_container_rejects_invalid_paths() {
     let empty = r#"
 container = ""
 "#;
-    let err = Config::parse(empty).unwrap_err();
+    let err = TakoToml::parse(empty).unwrap_err();
     assert!(err.to_string().contains("container cannot be empty"));
 
     let absolute = r#"
 container = "/tmp/Dockerfile"
 "#;
-    let err = Config::parse(absolute).unwrap_err();
+    let err = TakoToml::parse(absolute).unwrap_err();
     assert!(
         err.to_string()
             .contains("container must be a relative path")
@@ -184,7 +184,7 @@ container = "/tmp/Dockerfile"
     let parent = r#"
 container = "../Dockerfile"
 "#;
-    let err = Config::parse(parent).unwrap_err();
+    let err = TakoToml::parse(parent).unwrap_err();
     assert!(err.to_string().contains("container must not contain '..'"));
 }
 
@@ -194,14 +194,14 @@ fn test_validate_container_rejects_native_release_fields() {
 container = "Dockerfile"
 main = "server/index.mjs"
 "#;
-    let err = Config::parse(main).unwrap_err();
+    let err = TakoToml::parse(main).unwrap_err();
     assert!(err.to_string().contains("cannot set main"));
 
     let assets = r#"
 container = "Dockerfile"
 assets = ["dist/client"]
 "#;
-    let err = Config::parse(assets).unwrap_err();
+    let err = TakoToml::parse(assets).unwrap_err();
     assert!(err.to_string().contains("cannot set assets"));
 
     let build = r#"
@@ -210,7 +210,7 @@ container = "Dockerfile"
 [build]
 run = "bun run build"
 "#;
-    let err = Config::parse(build).unwrap_err();
+    let err = TakoToml::parse(build).unwrap_err();
     assert!(err.to_string().contains("cannot use [build]"));
 
     let build_stages = r#"
@@ -219,7 +219,7 @@ container = "Dockerfile"
 [[build_stages]]
 run = "bun run build"
 "#;
-    let err = Config::parse(build_stages).unwrap_err();
+    let err = TakoToml::parse(build_stages).unwrap_err();
     assert!(err.to_string().contains("cannot use [[build_stages]]"));
 }
 
@@ -230,7 +230,7 @@ fn test_validate_build_stage_cwd_rejects_absolute_paths() {
 cwd = "/tmp"
 run = "bun run build"
 "#;
-    let err = Config::parse(absolute).unwrap_err();
+    let err = TakoToml::parse(absolute).unwrap_err();
     assert!(
         err.to_string()
             .contains("'build_stages[0].cwd' must be relative")
@@ -245,7 +245,7 @@ fn test_validate_build_stage_cwd_allows_parent_within_root() {
 cwd = "packages/../packages/ui"
 run = "bun run build"
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
     assert_eq!(
         config.build_stages[0].cwd,
         Some("packages/../packages/ui".to_string())
@@ -261,7 +261,7 @@ fn test_validate_build_stage_cwd_allows_parent_traversal() {
 cwd = "../../sdk/javascript"
 run = "bun run build"
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
     assert_eq!(
         config.build_stages[0].cwd,
         Some("../../sdk/javascript".to_string())
@@ -273,13 +273,13 @@ fn test_validate_runtime_rejects_empty_and_unknown_values() {
     let empty = r#"
 runtime = ""
 "#;
-    let err = Config::parse(empty).unwrap_err();
+    let err = TakoToml::parse(empty).unwrap_err();
     assert!(err.to_string().contains("runtime cannot be empty"));
 
     let unknown = r#"
 runtime = "python"
 "#;
-    let err = Config::parse(unknown).unwrap_err();
+    let err = TakoToml::parse(unknown).unwrap_err();
     assert!(
         err.to_string()
             .contains("runtime must be one of: bun, node, go")
@@ -288,7 +288,7 @@ runtime = "python"
     let empty_version = r#"
 runtime = "bun@"
 "#;
-    let err = Config::parse(empty_version).unwrap_err();
+    let err = TakoToml::parse(empty_version).unwrap_err();
     assert!(err.to_string().contains("runtime version cannot be empty"));
 }
 
@@ -297,7 +297,7 @@ fn test_validate_preset_rejects_namespaced_alias_in_tako_toml() {
     let raw = r#"
 preset = "js/tanstack-start"
 "#;
-    let err = Config::parse(raw).unwrap_err();
+    let err = TakoToml::parse(raw).unwrap_err();
     assert!(
         err.to_string()
             .contains("preset must not include runtime namespace")
@@ -309,7 +309,7 @@ fn test_validate_preset_rejects_github_reference() {
     let raw = r#"
 preset = "github:owner/repo/presets/custom.toml"
 "#;
-    let err = Config::parse(raw).unwrap_err();
+    let err = TakoToml::parse(raw).unwrap_err();
     assert!(
         err.to_string()
             .contains("github preset references are not supported")
@@ -321,7 +321,7 @@ fn test_validate_preset_rejects_colon_references() {
     let raw = r#"
 preset = "custom:tanstack-start"
 "#;
-    let err = Config::parse(raw).unwrap_err();
+    let err = TakoToml::parse(raw).unwrap_err();
     assert!(err.to_string().contains("':' references are not supported"));
 }
 
@@ -330,7 +330,7 @@ fn test_parse_rejects_non_table_build_property() {
     let toml = r#"
 build = "bun run build"
 "#;
-    let err = Config::parse(toml).unwrap_err();
+    let err = TakoToml::parse(toml).unwrap_err();
     assert!(err.to_string().contains("'build' must be a table"));
 }
 
@@ -339,7 +339,7 @@ fn test_validate_main_rejects_empty_value() {
     let toml = r#"
 main = "   "
 "#;
-    let err = Config::parse(toml).unwrap_err();
+    let err = TakoToml::parse(toml).unwrap_err();
     assert!(err.to_string().contains("main cannot be empty"));
 }
 
@@ -348,14 +348,14 @@ fn test_parse_app_root() {
     let toml = r#"
 app_root = "app/server"
 "#;
-    let config = Config::parse(toml).unwrap();
+    let config = TakoToml::parse(toml).unwrap();
     assert_eq!(config.app_root.as_deref(), Some("app/server"));
     assert_eq!(config.js_app_root(), "app/server");
 }
 
 #[test]
 fn test_js_app_root_defaults_to_src() {
-    let config = Config::default();
+    let config = TakoToml::default();
     assert_eq!(config.js_app_root(), "src");
 }
 
@@ -364,13 +364,13 @@ fn test_validate_app_root_rejects_empty_absolute_and_parent_paths() {
     let empty = r#"
 app_root = ""
 "#;
-    let err = Config::parse(empty).unwrap_err();
+    let err = TakoToml::parse(empty).unwrap_err();
     assert!(err.to_string().contains("'app_root' cannot be empty"));
 
     let absolute = r#"
 app_root = "/tmp/app"
 "#;
-    let err = Config::parse(absolute).unwrap_err();
+    let err = TakoToml::parse(absolute).unwrap_err();
     assert!(
         err.to_string()
             .contains("'app_root' must be a relative path")
@@ -379,6 +379,6 @@ app_root = "/tmp/app"
     let parent = r#"
 app_root = "../app"
 "#;
-    let err = Config::parse(parent).unwrap_err();
+    let err = TakoToml::parse(parent).unwrap_err();
     assert!(err.to_string().contains("'app_root' must not contain '..'"));
 }

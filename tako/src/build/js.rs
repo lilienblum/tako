@@ -432,14 +432,6 @@ fn write_tako_declarations_for_adapter_with_bun(
     }
     fs::write(&path, content)?;
 
-    // Best-effort removal of the legacy runtime module so regenerated projects
-    // do not keep importing stale generated values.
-    for legacy in legacy_tako_gen_paths(project_dir, app_root) {
-        if legacy.is_file() {
-            let _ = fs::remove_file(&legacy);
-        }
-    }
-
     Ok(true)
 }
 
@@ -527,17 +519,6 @@ fn configured_js_app_root(project_dir: &Path) -> String {
     TakoToml::load_from_dir(project_dir)
         .map(|config| config.js_app_root().to_string())
         .unwrap_or_else(|_| DEFAULT_JS_APP_ROOT.to_string())
-}
-
-fn legacy_tako_gen_paths(project_dir: &Path, app_root: &str) -> Vec<PathBuf> {
-    let mut paths: Vec<PathBuf> = generated_declaration_parent_dirs(project_dir)
-        .into_iter()
-        .map(|dir| dir.join("tako.gen.ts"))
-        .collect();
-    paths.push(js_app_root_dir(project_dir, app_root).join("tako.gen.ts"));
-    paths.sort();
-    paths.dedup();
-    paths
 }
 
 #[derive(Clone, Copy)]

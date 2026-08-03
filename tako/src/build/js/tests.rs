@@ -271,17 +271,6 @@ printf '%s\n' 'export interface TakoChannels {' '  "chat": import("tako.sh").Inf
 }
 
 #[test]
-fn write_tako_declarations_deletes_legacy_tako_gen_module() {
-    let dir = TempDir::new().unwrap();
-    fs::write(dir.path().join("tako.gen.ts"), "// legacy").unwrap();
-
-    write_tako_declarations(dir.path()).unwrap();
-
-    assert!(!dir.path().join("tako.gen.ts").exists());
-    assert!(dir.path().join("tako.d.ts").exists());
-}
-
-#[test]
 fn generated_files_creates_demo_channel_and_workflow_in_empty_dirs() {
     let dir = TempDir::new().unwrap();
     link_sdk_package(dir.path());

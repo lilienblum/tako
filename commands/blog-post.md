@@ -20,10 +20,10 @@ The user provides a topic or idea. Examples:
 
 ### Step 1 — Research
 
-1. Read `SPEC.md` to understand current Tako capabilities and architecture.
+1. Read the relevant pages in `website/src/pages/docs/`, plus `PROTOCOL.md` when the topic crosses runtime boundaries.
 2. Read existing blog posts in `website/src/content/blog/` to match tone and style.
 3. Check memory for competitor landscape data (reference_competitor_landscape.md) for context on similar tools.
-4. If the topic involves a specific feature, read the relevant source code to get details right.
+4. If the topic involves a specific feature, read the relevant source code and tests to get details right.
 5. If the topic involves competitors or external tools, do web research to get current facts (stars, versions, status).
 6. **Fact-check rigorously.** Every factual claim (star counts, release dates, feature support, version numbers) must be verified against at least two independent sources. Cross-reference docs, GitHub, and web search results. If two sources disagree, dig until you find the truth. Do not publish a number you only saw once.
 
@@ -67,7 +67,7 @@ Combined with multi-server environments and Cloudflare Argo smart routing, Tako 
 - **Title**: include the searchable phrase a developer would actually type — concrete nouns (tool names, technologies, actions) belong in the title, not just in the body. "Deploy Node.js without Docker" beats "We ditched the whale." Clever is fine when the clever title still contains the search phrase; lean clever in the opening paragraph, not in the title. "How to X" / "X vs Y" / "Why X does Y" shapes all work — pick whichever fits the post.
 - **Length**: 1,200-1,500 words. Go deep enough to be genuinely useful, then stop.
 - Short intro paragraph, 2-3 sections with h2 headings, brief closing.
-- Every claim about Tako must be verifiable from SPEC.md or source code.
+- Every claim about Tako must be verifiable from current documentation, shipped source code, or tests.
 - Code examples when they clarify. Use real Tako commands/config, not pseudocode.
 - **Backlinks are mandatory.** Every post must link to at least 2-3 relevant docs pages (e.g., `/docs`, `/docs/tako-toml`, `/docs/deployment`, `/docs/cli`, `/docs/development`). Link inline where concepts are mentioned — don't save all links for the end. Also link to the GitHub repo, other blog posts, or external resources where relevant. Think of each post as an entry point that guides readers deeper into Tako's docs.
 - **Use tables for structured data.** When comparing tools, listing features, or presenting any data with multiple dimensions, use Markdown tables instead of prose or bullet lists. Tables are easier to scan and make comparisons obvious.

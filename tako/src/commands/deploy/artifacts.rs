@@ -176,12 +176,12 @@ pub(super) async fn prepare_build_phase(
                 output::with_spinner_async(
                     "Resolving build preset",
                     "Build preset resolved",
-                    crate::build::load_build_preset(&eff_app_dir, &preset_ref),
+                    crate::build::load_build_preset(&preset_ref),
                 )
                 .await
                 .map_err(|e| e.to_string())?
             } else {
-                crate::build::load_build_preset(&eff_app_dir, &preset_ref)
+                crate::build::load_build_preset(&preset_ref)
                     .await
                     .map_err(|e| e.to_string())?
             }

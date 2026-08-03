@@ -142,7 +142,7 @@ export default defineChannel("chat", {
 - Dynamic values are typed query params from `paramsSchema`.
 - `auth` is optional — omit or set `false` for public channels. Declarative auth receives `{ header?, cookie?, params, channel, operation }`.
 - Call `.$messageTypes<T>()` to type the per-message-type payloads. Presence of a `handler` option (not shown) chooses transport: WebSocket when present, SSE otherwise.
-- Every publish is stored in Tako's bounded channel replay log before delivery. Single-server production stores replay by deployed app id (`{name}/{env}`); local dev keeps replay in memory for the current daemon process. Multi-server channel deploys are blocked until shared channel storage exists because publish/replay must reach subscribers connected to every server. `replayWindowMs` defaults to 10 minutes and can be overridden per channel.
+- Every publish is stored in Tako's bounded channel replay log before delivery. Single-server production stores replay in local SQLite by deployed app id (`{name}/{env}`); local dev keeps replay in memory for the current daemon process. Multi-server channels use shared Postgres configured through the `postgres_url` credential. `replayWindowMs` defaults to 10 minutes and can be overridden per channel.
 - Browser subscriptions keep reconnecting until closed. The SDK retries through network loss, laptop sleep, server restarts, and clean connection rotation, then resumes from the last received message id inside the bounded replay window.
 - Browser clients can pass `authorization: token` to send `Authorization: Bearer <token>` on SSE channels or the equivalent WebSocket auth frame. Use `headers.Authorization` for custom authorization values, and omit both options for public or cookie-auth channels.
 
@@ -182,7 +182,7 @@ export default defineWorkflow<{ userId: string }>("send-email", {
 });
 ```
 
-Set `worker: "name"` in the workflow opts to assign a workflow to a named worker group; omitted workflows belong to the `default` group.
+The SDK records `worker: "name"` metadata and can filter discovery by group. The production server currently supervises one workflow lane per app, so named groups do not yet provide process isolation or independent scaling. Do not depend on group assignment in production until that supervisor wiring ships.
 
 Set `local: true` in the workflow opts when a multi-server deploy should use per-server local queues and cron for that workflow. Local cron runs once per server and enqueue uniqueness is scoped to each server.
 

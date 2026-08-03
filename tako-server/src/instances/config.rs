@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use super::{LEGACY_INTERNAL_STATUS_HOST, internal_app_host};
+use super::internal_app_host;
 
 /// Configuration for an app
 #[derive(Debug, Clone)]
@@ -62,9 +62,7 @@ impl AppConfig {
     }
 
     pub(super) fn apply_internal_defaults(&mut self) {
-        if self.health_check_host.is_empty()
-            || self.health_check_host == LEGACY_INTERNAL_STATUS_HOST
-        {
+        if self.health_check_host.is_empty() {
             self.health_check_host = self.internal_host();
         }
     }
@@ -87,7 +85,7 @@ impl Default for AppConfig {
             min_instances: 1,
             max_instances: 4,
             health_check_path: "/status".to_string(),
-            health_check_host: LEGACY_INTERNAL_STATUS_HOST.to_string(),
+            health_check_host: String::new(),
             startup_timeout: Duration::from_secs(30),
             idle_timeout: crate::defaults::DEFAULT_IDLE_TIMEOUT,
         }

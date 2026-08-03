@@ -5,7 +5,7 @@ use std::path::Path;
 
 const RESERVED_DERIVED_ENV_VARS: &[&str] = &["ENV"];
 
-impl Config {
+impl TakoToml {
     /// JavaScript app root relative to the config file.
     ///
     /// Tako discovers `channels/` and `workflows/` inside it.

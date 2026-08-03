@@ -40,7 +40,6 @@ pub use rolling::*;
 pub use spawner::*;
 
 pub const INTERNAL_HOST_SUFFIX: &str = ".tako";
-const LEGACY_INTERNAL_STATUS_HOST: &str = "tako.internal";
 pub const INTERNAL_TOKEN_HEADER: &str = "X-Tako-Internal-Token";
 
 pub fn internal_app_host(app_name: &str) -> String {

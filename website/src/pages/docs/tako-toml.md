@@ -26,6 +26,8 @@ servers = ["prod-a"]
 
 `name` is optional but recommended. If omitted, Tako derives the app name from the selected config file's parent directory. Remote identity is `{name}/{env}`, so renaming the app or directory fallback creates a separate deployed app.
 
+App names are DNS-compatible. They use lowercase letters, numbers, and hyphens, start with a lowercase letter, end with a lowercase letter or number, and contain at most 63 characters.
+
 ## Top-Level Fields
 
 | Field             | Type   | Purpose                                                                                               |
@@ -187,21 +189,12 @@ Provider credentials are encrypted in `.tako/secrets.json`, not stored in `tako.
 
 ```toml
 [workflows]
-workers = 0
-concurrency = 10
-
-[workflows.email]
 run = ["./worker", "email"]
-workers = 1
-
-[servers.la.workflows]
-workers = 2
-
-[servers.la.workflows.email]
-workers = 4
 ```
 
-`workers = 0` means scale-to-zero workers. `concurrency` defaults to 10. `run` provides an explicit worker command for runtimes that need one; in v0, container releases support one configured workflow `run` command across the base workflow config and named groups. Named workflow groups inherit from `[workflows]`, then can be overridden per group and per server.
+`run` provides an explicit worker command for runtimes that need one. In v0, container releases support one configured workflow command.
+
+The current production runtime supervises one scale-to-zero workflow lane per app. The config parser accepts `workers`, `concurrency`, named groups, and per-server overrides, but those values do not yet change production worker supervision. Do not depend on them until the runtime wiring ships.
 
 In multi-server environments, JS workflows require `postgres_url` unless every workflow opts into local per-server execution. Go workflow deployments require `postgres_url` for multi-server environments. Channels also require `postgres_url` for multi-server deploys so every server can read and publish to the same broadcast replay log.
 
