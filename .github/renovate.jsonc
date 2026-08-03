@@ -10,6 +10,11 @@
   "timezone": "Asia/Tokyo",
   // weekly batch; vulnerability alerts bypass the schedule
   "schedule": ["before 6am on monday"],
+  // refresh supported locks weekly and merge once required checks pass
+  "lockFileMaintenance": {
+    "enabled": true,
+    "automerge": true,
+  },
   "labels": ["dependencies"],
   "postUpdateOptions": ["gomodTidy"],
   "ignorePaths": ["**/node_modules/**", "e2e/fixtures/**"],
@@ -19,6 +24,11 @@
     {
       "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
       "automerge": true,
+    },
+    // refresh in-range Cargo updates with the full dependency graph
+    {
+      "matchManagers": ["cargo"],
+      "rangeStrategy": "replace",
     },
     // keep existing ^ ranges; bun.lock already gives reproducibility,
     // so skip best-practices' devDependency pinning churn
