@@ -5,17 +5,17 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/labstack/echo/v4"
-	"github.com/labstack/echo/v4/middleware"
+	"github.com/labstack/echo/v5"
+	"github.com/labstack/echo/v5/middleware"
 	"tako.sh"
 )
 
 func main() {
 	e := echo.New()
-	e.Use(middleware.Logger())
+	e.Use(middleware.RequestLogger())
 	e.Use(middleware.Recover())
 
-	e.GET("/", func(c echo.Context) error {
+	e.GET("/", func(c *echo.Context) error {
 		html := fmt.Sprintf(`<!doctype html>
 <html>
 <body>
@@ -26,11 +26,11 @@ func main() {
 		return c.HTML(http.StatusOK, html)
 	})
 
-	e.GET("/api/health", func(c echo.Context) error {
+	e.GET("/api/health", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]bool{"ok": true})
 	})
 
-	e.GET("/api/secret", func(c echo.Context) error {
+	e.GET("/api/secret", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]bool{
 			"has_secret": Secrets.ExampleSecret() != "",
 		})
