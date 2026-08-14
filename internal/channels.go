@@ -1,7 +1,6 @@
 package internal
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -10,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/santhosh-tekuri/jsonschema/v5"
+	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 const (
@@ -325,7 +324,7 @@ func (r *ChannelRegistry) ValidateParams(channel string, query string) (json.Raw
 		params[key] = coerceParamValue(schema, key, vals[len(vals)-1])
 	}
 
-	compiled, err := compileSchema(definition.ParamsSchema)
+	compiled, err := compileSchema(schema)
 	if err != nil {
 		return nil, err
 	}
@@ -368,10 +367,10 @@ func (r *ChannelRegistry) Metadata() []ChannelDefinitionMeta {
 	return out
 }
 
-func compileSchema(raw json.RawMessage) (*jsonschema.Schema, error) {
+func compileSchema(doc any) (*jsonschema.Schema, error) {
 	compiler := jsonschema.NewCompiler()
-	compiler.Draft = jsonschema.Draft2020
-	if err := compiler.AddResource("schema.json", bytes.NewReader(raw)); err != nil {
+	compiler.DefaultDraft(jsonschema.Draft2020)
+	if err := compiler.AddResource("schema.json", doc); err != nil {
 		return nil, err
 	}
 	return compiler.Compile("schema.json")
