@@ -75,6 +75,10 @@ pub struct DevArgs {
     /// Start with a temporary public tunnel URL enabled
     #[arg(long)]
     pub tunnel: bool,
+
+    /// Hard-restart the app process with the current config
+    #[arg(long)]
+    pub restart: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -283,6 +287,7 @@ impl Cli {
                         DEV_PUBLIC_PORT,
                         args.variant,
                         args.tunnel,
+                        args.restart,
                         None,
                         self.config.as_deref(),
                     ))?,
@@ -290,6 +295,7 @@ impl Cli {
                         DEV_PUBLIC_PORT,
                         args.variant,
                         args.tunnel,
+                        args.restart,
                         Some(cmd),
                         self.config.as_deref(),
                     ))?,

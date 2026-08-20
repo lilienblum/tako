@@ -47,6 +47,7 @@ pub(super) async fn prepare(
     public_port: u16,
     variant: Option<String>,
     tunnel: bool,
+    restart: bool,
     command_override: Option<Vec<String>>,
     config_path: Option<&Path>,
 ) -> Result<PrepareOutcome, Box<dyn std::error::Error>> {
@@ -264,9 +265,11 @@ pub(super) async fn prepare(
             .map_err(|e| format!("dev server failed to start: {}", e))?;
     }
 
-    // If the app is already running under this config, connect as a client.
+    // If the app is already running under this config, connect as a client
+    // unless --restart asked for a hard process restart.
     let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
-    if let Ok(apps) = crate::dev_server_client::list_registered_apps().await
+    if !restart
+        && let Ok(apps) = crate::dev_server_client::list_registered_apps().await
         && let Some(existing) = apps.iter().find(|a| a.config_path == config_key)
         && existing.status.as_str() == "running"
     {

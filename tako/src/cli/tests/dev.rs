@@ -133,6 +133,27 @@ fn dev_parses_tunnel_flag() {
 }
 
 #[test]
+fn dev_parses_restart_flag() {
+    let cli = Cli::try_parse_from(["tako", "dev", "--restart"]).unwrap();
+    let Commands::Dev { command, args } = cli.command.expect("command") else {
+        panic!("expected Dev");
+    };
+    assert!(command.is_none());
+    assert!(args.restart);
+    assert!(!args.tunnel);
+}
+
+#[test]
+fn dev_parses_restart_with_tunnel() {
+    let cli = Cli::try_parse_from(["tako", "dev", "--restart", "--tunnel"]).unwrap();
+    let Commands::Dev { args, .. } = cli.command.expect("command") else {
+        panic!("expected Dev");
+    };
+    assert!(args.restart);
+    assert!(args.tunnel);
+}
+
+#[test]
 fn dev_parses_var_alias() {
     let cli = Cli::try_parse_from(["tako", "dev", "--var", "foo"]).unwrap();
     let Commands::Dev { command, args } = cli.command.expect("command") else {

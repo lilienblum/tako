@@ -110,10 +110,19 @@ pub async fn run(
     public_port: u16,
     variant: Option<String>,
     tunnel: bool,
+    restart: bool,
     command_override: Option<Vec<String>>,
     config_path: Option<&Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let session = match prepare(public_port, variant, tunnel, command_override, config_path).await?
+    let session = match prepare(
+        public_port,
+        variant,
+        tunnel,
+        restart,
+        command_override,
+        config_path,
+    )
+    .await?
     {
         PrepareOutcome::Ready(s) => *s,
         PrepareOutcome::AlreadyConnected => return Ok(()),

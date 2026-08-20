@@ -125,6 +125,14 @@ tako dev --var staging
 
 Variants run a DNS variant of the app, such as `myapp-staging.test`.
 
+## Restart
+
+```bash
+tako dev --restart
+```
+
+`--restart` hard-restarts the app process with the current config instead of attaching to the running session.
+
 ## Logs
 
 Interactive `tako dev` prints a header, then streams logs and lifecycle state directly to stdout. App output is grouped with scopes such as `app`, `worker`, and `tako`.

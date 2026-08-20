@@ -92,6 +92,7 @@ tako dev
 tako dev vite dev            # wrap an explicit dev command for this run
 tako dev --variant staging    # myapp-staging.test
 tako dev --tunnel             # start with a temporary public URL
+tako dev --restart            # hard-restart the app process with current config
 tako dev stop [name]          # stop a running dev app
 tako dev list                   # list registered dev apps
 ```
