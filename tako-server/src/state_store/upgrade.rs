@@ -1,28 +1,28 @@
 use tako_core::UpgradeMode;
 
-use super::{SqliteStateStore, StateStoreError, block_on};
+use super::{SqliteStateStore, StateStoreError};
 
 impl SqliteStateStore {
     pub fn set_server_mode(&self, mode: UpgradeMode) -> Result<(), StateStoreError> {
         let conn = self.lock_conn()?;
-        block_on(conn.execute(
+        conn.execute(
             "UPDATE server_state SET server_mode = ?1 WHERE id = 1;",
             (server_mode_to_str(mode),),
-        ))?;
+        )?;
         Ok(())
     }
 
     pub fn server_mode(&self) -> Result<UpgradeMode, StateStoreError> {
         let conn = self.lock_conn()?;
-        let mode_str: Option<String> = block_on(async {
-            let mut rows = conn
-                .query("SELECT server_mode FROM server_state WHERE id = 1;", ())
-                .await?;
-            match rows.next().await? {
-                Some(row) => Ok::<_, StateStoreError>(Some(row.get(0)?)),
-                None => Ok(None),
-            }
-        })?;
+        let mode_str = match conn.query_row(
+            "SELECT server_mode FROM server_state WHERE id = 1;",
+            [],
+            |row| row.get::<_, String>(0),
+        ) {
+            Ok(mode) => Some(mode),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(e) => return Err(e.into()),
+        };
 
         match mode_str {
             Some(s) => server_mode_from_str(&s),
@@ -35,98 +35,76 @@ impl SqliteStateStore {
 
     pub fn try_acquire_upgrade_lock(&self, owner: &str) -> Result<bool, StateStoreError> {
         let conn = self.lock_conn()?;
-        block_on(async {
-            let tx = conn.unchecked_transaction().await?;
-            let result: Result<bool, StateStoreError> = async {
-                let mut rows = tx
-                    .query(
-                        "SELECT owner, acquired_at_unix_secs FROM upgrade_lock WHERE id = 1;",
-                        (),
-                    )
-                    .await?;
-                let existing: Option<(String, i64)> = match rows.next().await? {
-                    Some(row) => Some((row.get(0)?, row.get(1)?)),
-                    None => None,
-                };
-                drop(rows);
+        let tx = conn.unchecked_transaction()?;
+        let existing = match tx.query_row(
+            "SELECT owner, acquired_at_unix_secs FROM upgrade_lock WHERE id = 1;",
+            [],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        ) {
+            Ok(row) => Some(row),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(e) => return Err(e.into()),
+        };
+        let now: i64 =
+            tx.query_row("SELECT CAST(strftime('%s','now') AS INTEGER);", [], |row| {
+                row.get(0)
+            })?;
 
-                let mut rows = tx
-                    .query("SELECT CAST(strftime('%s','now') AS INTEGER);", ())
-                    .await?;
-                let now: i64 = rows
-                    .next()
-                    .await?
-                    .ok_or_else(|| StateStoreError::Sqlite("strftime returned no row".into()))?
-                    .get(0)?;
-                drop(rows);
-
-                match existing {
-                    Some((ref existing_owner, _)) if existing_owner == owner => Ok(true),
-                    Some((_, acquired_at)) if now - acquired_at > Self::UPGRADE_LOCK_STALE_SECS => {
-                        // Stale lock: force-acquire by replacing it.
-                        tx.execute(
-                            "UPDATE upgrade_lock SET owner = ?1, acquired_at_unix_secs = ?2 WHERE id = 1;",
-                            (owner, now),
-                        )
-                        .await?;
-                        Ok(true)
-                    }
-                    Some(_) => Ok(false),
-                    None => {
-                        tx.execute(
-                            "INSERT INTO upgrade_lock (id, owner, acquired_at_unix_secs)
-                             VALUES (1, ?1, CAST(strftime('%s','now') AS INTEGER));",
-                            (owner,),
-                        )
-                        .await?;
-                        Ok(true)
-                    }
-                }
+        let acquired = match &existing {
+            Some((existing_owner, _)) if existing_owner == owner => true,
+            Some((_, acquired_at)) if now - acquired_at > Self::UPGRADE_LOCK_STALE_SECS => {
+                tx.execute(
+                    "UPDATE upgrade_lock SET owner = ?1, acquired_at_unix_secs = ?2 WHERE id = 1;",
+                    (owner, now),
+                )?;
+                true
             }
-            .await;
-            tako_sqlite::commit_or_rollback(tx, result).await
-        })
+            Some(_) => false,
+            None => {
+                tx.execute(
+                    "INSERT INTO upgrade_lock (id, owner, acquired_at_unix_secs)
+                     VALUES (1, ?1, CAST(strftime('%s','now') AS INTEGER));",
+                    (owner,),
+                )?;
+                true
+            }
+        };
+        tx.commit()?;
+        Ok(acquired)
     }
 
     pub fn release_upgrade_lock(&self, owner: &str) -> Result<bool, StateStoreError> {
         let conn = self.lock_conn()?;
-        block_on(async {
-            let tx = conn.unchecked_transaction().await?;
-            let result: Result<bool, StateStoreError> = async {
-                let mut rows = tx
-                    .query("SELECT owner FROM upgrade_lock WHERE id = 1;", ())
-                    .await?;
-                let existing: Option<String> = match rows.next().await? {
-                    Some(row) => Some(row.get(0)?),
-                    None => None,
-                };
-                drop(rows);
+        let tx = conn.unchecked_transaction()?;
+        let existing =
+            match tx.query_row("SELECT owner FROM upgrade_lock WHERE id = 1;", [], |row| {
+                row.get::<_, String>(0)
+            }) {
+                Ok(owner) => Some(owner),
+                Err(rusqlite::Error::QueryReturnedNoRows) => None,
+                Err(e) => return Err(e.into()),
+            };
 
-                match existing {
-                    Some(existing) if existing == owner => {
-                        tx.execute("DELETE FROM upgrade_lock WHERE id = 1;", ())
-                            .await?;
-                        Ok(true)
-                    }
-                    _ => Ok(false),
-                }
+        let released = match existing {
+            Some(existing) if existing == owner => {
+                tx.execute("DELETE FROM upgrade_lock WHERE id = 1;", [])?;
+                true
             }
-            .await;
-            tako_sqlite::commit_or_rollback(tx, result).await
-        })
+            _ => false,
+        };
+        tx.commit()?;
+        Ok(released)
     }
 
     pub fn upgrade_lock_owner(&self) -> Result<Option<String>, StateStoreError> {
         let conn = self.lock_conn()?;
-        block_on(async {
-            let mut rows = conn
-                .query("SELECT owner FROM upgrade_lock WHERE id = 1;", ())
-                .await?;
-            match rows.next().await? {
-                Some(row) => Ok(Some(row.get(0)?)),
-                None => Ok(None),
-            }
-        })
+        match conn.query_row("SELECT owner FROM upgrade_lock WHERE id = 1;", [], |row| {
+            row.get(0)
+        }) {
+            Ok(owner) => Ok(Some(owner)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
     }
 }
 

@@ -1,105 +1,93 @@
 use crate::instances::AppConfig;
 
-use super::{PersistedApp, SqliteStateStore, StateStoreError, block_on};
+use super::{PersistedApp, SqliteStateStore, StateStoreError};
 
 impl SqliteStateStore {
     pub fn upsert_app(&self, config: &AppConfig, routes: &[String]) -> Result<(), StateStoreError> {
         let conn = self.lock_conn()?;
-        block_on(async {
-            let tx = conn.unchecked_transaction().await?;
-            let result = upsert_app_on(&tx, config, routes).await;
-            tako_sqlite::commit_or_rollback(tx, result).await
-        })
+        let tx = conn.unchecked_transaction()?;
+        upsert_app_on(&tx, config, routes)?;
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn delete_app(&self, name: &str, environment: &str) -> Result<(), StateStoreError> {
         let conn = self.lock_conn()?;
         // Delete secrets for this app to prevent leaking to a future app with the same name.
         let secret_key = format!("{name}/{environment}");
-        block_on(async {
-            for table in [
-                "app_secrets",
-                "app_runtime_credentials",
-                "app_storages",
-                "app_ssl",
-                "app_backups",
-            ] {
-                conn.execute(
-                    &format!("DELETE FROM {table} WHERE app = ?1;"),
-                    (secret_key.as_str(),),
-                )
-                .await?;
-            }
+        for table in [
+            "app_secrets",
+            "app_runtime_credentials",
+            "app_storages",
+            "app_ssl",
+            "app_backups",
+        ] {
             conn.execute(
-                "DELETE FROM apps WHERE name = ?1 AND environment = ?2;",
-                (name, environment),
-            )
-            .await?;
-            Ok(())
-        })
+                &format!("DELETE FROM {table} WHERE app = ?1;"),
+                (secret_key.as_str(),),
+            )?;
+        }
+        conn.execute(
+            "DELETE FROM apps WHERE name = ?1 AND environment = ?2;",
+            (name, environment),
+        )?;
+        Ok(())
     }
 
     pub fn load_apps(&self) -> Result<Vec<PersistedApp>, StateStoreError> {
         let conn = self.lock_conn()?;
-        block_on(async {
-            let mut rows = conn
-                .query(
-                    "SELECT
-                        name, environment, version, min_instances, max_instances, source_ip
-                     FROM apps
-                     ORDER BY name, environment;",
-                    (),
-                )
-                .await?;
+        let mut stmt = conn.prepare(
+            "SELECT
+                name, environment, version, min_instances, max_instances, source_ip
+             FROM apps
+             ORDER BY name, environment;",
+        )?;
+        let app_rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(stmt);
 
-            let mut app_rows: Vec<(String, String, String, i64, i64, String)> = Vec::new();
-            while let Some(row) = rows.next().await? {
-                app_rows.push((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                ));
-            }
-            drop(rows);
+        let mut apps = Vec::new();
+        for (name, environment, version, min_instances, max_instances, source_ip) in app_rows {
+            let mut route_stmt = conn.prepare(
+                "SELECT route FROM app_routes
+                 WHERE name = ?1 AND environment = ?2
+                 ORDER BY route;",
+            )?;
+            let routes = route_stmt
+                .query_map((name.as_str(), environment.as_str()), |row| {
+                    row.get::<_, String>(0)
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
 
-            let mut apps = Vec::new();
-            for (name, environment, version, min_instances, max_instances, source_ip) in app_rows {
-                let mut route_rows = conn
-                    .query(
-                        "SELECT route FROM app_routes
-                         WHERE name = ?1 AND environment = ?2
-                         ORDER BY route;",
-                        (name.as_str(), environment.as_str()),
-                    )
-                    .await?;
-                let mut routes = Vec::new();
-                while let Some(row) = route_rows.next().await? {
-                    routes.push(row.get::<String>(0)?);
-                }
+            let config = AppConfig {
+                name,
+                environment,
+                version,
+                min_instances: to_u32(min_instances, "min_instances")?,
+                max_instances: to_u32(max_instances, "max_instances")?,
+                source_ip: source_ip_from_str(&source_ip)?,
+                ..Default::default()
+            };
 
-                let config = AppConfig {
-                    name,
-                    environment,
-                    version,
-                    min_instances: to_u32(min_instances, "min_instances")?,
-                    max_instances: to_u32(max_instances, "max_instances")?,
-                    source_ip: source_ip_from_str(&source_ip)?,
-                    ..Default::default()
-                };
+            apps.push(PersistedApp { config, routes });
+        }
 
-                apps.push(PersistedApp { config, routes });
-            }
-
-            Ok(apps)
-        })
+        Ok(apps)
     }
 }
 
-async fn upsert_app_on(
-    conn: &turso::Connection,
+fn upsert_app_on(
+    conn: &rusqlite::Connection,
     config: &AppConfig,
     routes: &[String],
 ) -> Result<(), StateStoreError> {
@@ -120,14 +108,12 @@ async fn upsert_app_on(
             config.max_instances as i64,
             source_ip_to_str(config.source_ip),
         ),
-    )
-    .await?;
+    )?;
 
     conn.execute(
         "DELETE FROM app_routes WHERE name = ?1 AND environment = ?2;",
         (config.name.as_str(), config.environment.as_str()),
-    )
-    .await?;
+    )?;
 
     for route in routes {
         conn.execute(
@@ -137,8 +123,7 @@ async fn upsert_app_on(
                 config.environment.as_str(),
                 route.as_str(),
             ),
-        )
-        .await?;
+        )?;
     }
 
     Ok(())

@@ -11,7 +11,7 @@ fn open_creates_db_and_schema() {
     let (_tmp, store) = temp_store();
     assert!(store.list().unwrap().is_empty());
 
-    let columns = block_on(table_columns(&store.conn, "apps")).unwrap();
+    let columns = table_columns(&store.conn, "apps").unwrap();
     assert_eq!(
         columns,
         vec![

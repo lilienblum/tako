@@ -61,7 +61,7 @@ pub(crate) fn clamp_lease_ms(lease_ms: u64) -> i64 {
 #[derive(thiserror::Error, Debug)]
 pub enum RunsDbError {
     #[error("sqlite error: {0}")]
-    Sqlite(#[from] turso::Error),
+    Sqlite(#[from] rusqlite::Error),
     #[error("postgres error: {0}")]
     Postgres(#[from] postgres::Error),
     #[error("json error: {0}")]
@@ -138,7 +138,7 @@ impl RunsDb {
 
     /// Test-only raw SQL escape hatches against the sqlite backend.
     #[cfg(test)]
-    pub(crate) fn raw_execute(&self, sql: &str, params: impl turso::IntoParams) {
+    pub(crate) fn raw_execute(&self, sql: &str, params: impl rusqlite::Params) {
         match &self.backend {
             RunsDbBackend::Sqlite(db) => db.raw_execute(sql, params),
             RunsDbBackend::Postgres(_) => {
@@ -151,8 +151,8 @@ impl RunsDb {
     pub(crate) fn raw_query_values(
         &self,
         sql: &str,
-        params: impl turso::IntoParams,
-    ) -> Vec<turso::Value> {
+        params: impl rusqlite::Params,
+    ) -> Vec<rusqlite::types::Value> {
         match &self.backend {
             RunsDbBackend::Sqlite(db) => db.raw_query_values(sql, params),
             RunsDbBackend::Postgres(_) => {

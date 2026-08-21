@@ -5,9 +5,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use tako_sqlite::block_on;
+use rusqlite::Connection;
 use tokio::sync::mpsc;
-use turso::Connection;
 
 const PID_FILE_DIR: &str = ".tako/pids";
 
@@ -236,16 +235,8 @@ impl DevStateStore {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| format!("create db parent: {e}"))?;
         }
-        let path = path
-            .to_str()
-            .ok_or_else(|| "non-UTF-8 dev state db path".to_string())?;
-        let conn = block_on(async {
-            let conn = tako_sqlite::open_local(path)
-                .await
-                .map_err(|e| format!("open db: {e}"))?;
-            ensure_schema(&conn).await?;
-            Ok::<_, String>(conn)
-        })?;
+        let conn = tako_sqlite::open_local(&path).map_err(|e| format!("open db: {e}"))?;
+        ensure_schema(&conn)?;
         Ok(Self { conn })
     }
 
@@ -257,75 +248,71 @@ impl DevStateStore {
         variant: Option<&str>,
     ) -> Result<(), String> {
         let now = unix_now() as i64;
-        block_on(self.conn.execute(
-            "INSERT INTO apps (config_path, project_dir, name, variant, created_at, updated_at)
+        self.conn
+            .execute(
+                "INSERT INTO apps (config_path, project_dir, name, variant, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?5)
              ON CONFLICT(config_path) DO UPDATE SET
                 project_dir = excluded.project_dir,
                 name = excluded.name,
                 variant = excluded.variant,
                 updated_at = excluded.updated_at;",
-            (config_path, project_dir, name, variant, now),
-        ))
-        .map_err(|e| format!("register: {e}"))?;
+                (config_path, project_dir, name, variant, now),
+            )
+            .map_err(|e| format!("register: {e}"))?;
         Ok(())
     }
 
     pub fn unregister(&self, config_path: &str) -> Result<bool, String> {
-        let rows = block_on(
-            self.conn
-                .execute("DELETE FROM apps WHERE config_path = ?1;", (config_path,)),
-        )
-        .map_err(|e| format!("unregister: {e}"))?;
+        let rows = self
+            .conn
+            .execute("DELETE FROM apps WHERE config_path = ?1;", (config_path,))
+            .map_err(|e| format!("unregister: {e}"))?;
         Ok(rows > 0)
     }
 
     #[cfg(test)]
     pub fn get(&self, config_path: &str) -> Result<Option<RegisteredApp>, String> {
-        block_on(async {
-            let mut rows = self
-                .conn
-                .query(
-                    "SELECT config_path, project_dir, name, variant, is_enabled, created_at, updated_at
+        match self.conn.query_row(
+            "SELECT config_path, project_dir, name, variant, is_enabled, created_at, updated_at
                      FROM apps WHERE config_path = ?1;",
-                    (config_path,),
-                )
-                .await
-                .map_err(|e| format!("get: {e}"))?;
-            match rows.next().await.map_err(|e| format!("get: {e}"))? {
-                Some(row) => Ok(Some(row_to_registered_app(&row)?)),
-                None => Ok(None),
-            }
-        })
+            (config_path,),
+            |row| Ok(row_to_registered_app(row)),
+        ) {
+            Ok(app) => app.map(Some),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(format!("get: {e}")),
+        }
     }
 
     pub fn list(&self) -> Result<Vec<RegisteredApp>, String> {
-        block_on(async {
-            let mut rows = self
-                .conn
-                .query(
-                    "SELECT config_path, project_dir, name, variant, is_enabled, created_at, updated_at
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT config_path, project_dir, name, variant, is_enabled, created_at, updated_at
                      FROM apps ORDER BY name, config_path;",
-                    (),
-                )
-                .await
-                .map_err(|e| format!("list: {e}"))?;
-            let mut out = Vec::new();
-            while let Some(row) = rows.next().await.map_err(|e| format!("list: {e}"))? {
-                out.push(row_to_registered_app(&row)?);
-            }
-            Ok(out)
-        })
+            )
+            .map_err(|e| format!("list: {e}"))?;
+        let rows = stmt
+            .query_map([], |row| Ok(row_to_registered_app(row)))
+            .map_err(|e| format!("list: {e}"))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| format!("list: {e}"))??);
+        }
+        Ok(out)
     }
 
     #[cfg(test)]
     pub fn set_enabled(&self, config_path: &str, enabled: bool) -> Result<bool, String> {
         let now = unix_now() as i64;
-        let rows = block_on(self.conn.execute(
-            "UPDATE apps SET is_enabled = ?1, updated_at = ?2 WHERE config_path = ?3;",
-            (enabled as i64, now, config_path),
-        ))
-        .map_err(|e| format!("set_enabled: {e}"))?;
+        let rows = self
+            .conn
+            .execute(
+                "UPDATE apps SET is_enabled = ?1, updated_at = ?2 WHERE config_path = ?3;",
+                (enabled as i64, now, config_path),
+            )
+            .map_err(|e| format!("set_enabled: {e}"))?;
         Ok(rows > 0)
     }
 
@@ -342,23 +329,23 @@ impl DevStateStore {
     }
 }
 
-fn row_to_registered_app(row: &turso::Row) -> Result<RegisteredApp, String> {
+fn row_to_registered_app(row: &rusqlite::Row) -> Result<RegisteredApp, String> {
     let field = |i: usize| move |e| format!("read app column {i}: {e}");
     Ok(RegisteredApp {
-        config_path: row.get(0).map_err(field(0))?,
-        project_dir: row.get(1).map_err(field(1))?,
-        name: row.get(2).map_err(field(2))?,
-        variant: row.get::<Option<String>>(3).map_err(field(3))?,
-        is_enabled: row.get::<i64>(4).map_err(field(4))? != 0,
-        created_at: row.get::<i64>(5).map_err(field(5))? as u64,
-        updated_at: row.get::<i64>(6).map_err(field(6))? as u64,
+        config_path: row.get::<_, String>(0).map_err(field(0))?,
+        project_dir: row.get::<_, String>(1).map_err(field(1))?,
+        name: row.get::<_, String>(2).map_err(field(2))?,
+        variant: row.get::<_, Option<String>>(3).map_err(field(3))?,
+        is_enabled: row.get::<_, i64>(4).map_err(field(4))? != 0,
+        created_at: row.get::<_, i64>(5).map_err(field(5))? as u64,
+        updated_at: row.get::<_, i64>(6).map_err(field(6))? as u64,
     })
 }
 
-async fn ensure_schema(conn: &Connection) -> Result<(), String> {
-    let columns = table_columns(conn, "apps").await?;
+fn ensure_schema(conn: &Connection) -> Result<(), String> {
+    let columns = table_columns(conn, "apps")?;
     if columns.is_empty() {
-        return create_apps_table(conn).await;
+        return create_apps_table(conn);
     }
 
     // v0: no migrations — drop and recreate if schema doesn't match.
@@ -373,15 +360,14 @@ async fn ensure_schema(conn: &Connection) -> Result<(), String> {
     ];
     if !expected.iter().all(|col| columns.iter().any(|c| c == col)) {
         conn.execute_batch("DROP TABLE apps;")
-            .await
             .map_err(|e| format!("drop mismatched apps table: {e}"))?;
-        return create_apps_table(conn).await;
+        return create_apps_table(conn);
     }
 
     Ok(())
 }
 
-async fn create_apps_table(conn: &Connection) -> Result<(), String> {
+fn create_apps_table(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS apps (
             config_path TEXT PRIMARY KEY,
@@ -393,27 +379,18 @@ async fn create_apps_table(conn: &Connection) -> Result<(), String> {
             updated_at INTEGER NOT NULL DEFAULT 0
         );",
     )
-    .await
     .map_err(|e| format!("create apps schema: {e}"))
 }
 
-async fn table_columns(conn: &Connection, table: &str) -> Result<Vec<String>, String> {
-    let mut rows = conn
-        .query(&format!("PRAGMA table_info({table});"), ())
-        .await
+fn table_columns(conn: &Connection, table: &str) -> Result<Vec<String>, String> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({table});"))
         .map_err(|e| format!("query table info: {e}"))?;
-    let mut out = Vec::new();
-    while let Some(row) = rows
-        .next()
-        .await
-        .map_err(|e| format!("collect table info: {e}"))?
-    {
-        out.push(
-            row.get::<String>(1)
-                .map_err(|e| format!("read table info: {e}"))?,
-        );
-    }
-    Ok(out)
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| format!("query table info: {e}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("collect table info: {e}"))
 }
 
 #[cfg(test)]

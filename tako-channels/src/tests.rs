@@ -483,7 +483,8 @@ fn channel_store_supports_two_processes_writing_interleaved() {
     assert_eq!(store.read_after("mp", None, 100).unwrap().len(), 21);
 }
 
-/// A write issued while a read cursor is live must either persist or fail.
+/// A write issued while another connection holds a live read cursor must
+/// either persist or fail.
 #[test]
 fn write_with_live_read_cursor_persists() {
     let temp = tempfile::TempDir::new().unwrap();
@@ -495,26 +496,18 @@ fn write_with_live_read_cursor_persists() {
             .unwrap();
     }
 
-    let write_result = {
-        let conn = store.sqlite_conn();
-        crate::store::block_on(async {
-            // Open a cursor and consume only the first row, keeping it live.
-            let mut rows = conn
-                .query("SELECT id FROM channel_messages", ())
-                .await
-                .unwrap();
-            let _first = rows.next().await.unwrap();
-            conn.execute(
-                "INSERT INTO channel_messages (channel, type, data_json) VALUES ('cursor', 'message', '{}')",
-                (),
-            )
-            .await
-        })
-    };
+    let reader = tako_sqlite::open_local(&db_path).unwrap();
+    let mut stmt = reader.prepare("SELECT id FROM channel_messages").unwrap();
+    let mut rows = stmt.query([]).unwrap();
+    let _first = rows.next().unwrap();
+    let write_result = store.append("cursor", &test_payload("live"));
+    drop(rows);
+    drop(stmt);
+    drop(reader);
 
     let count = store.raw_query_i64(
         "SELECT COUNT(*) FROM channel_messages WHERE channel = 'cursor'",
-        (),
+        [],
     );
     match write_result {
         Ok(_) => assert_eq!(count, 6, "write returned Ok but did not persist"),

@@ -219,8 +219,8 @@ pub enum ChannelError {
     Storage(String),
 }
 
-impl From<turso::Error> for ChannelError {
-    fn from(e: turso::Error) -> Self {
+impl From<rusqlite::Error> for ChannelError {
+    fn from(e: rusqlite::Error) -> Self {
         ChannelError::Storage(e.to_string())
     }
 }

@@ -93,7 +93,7 @@ libc = "0.2"
 
 # SQLite state store for dev-server
 tako-sqlite = { path = "../tako-sqlite" }
-turso.workspace = true
+rusqlite.workspace = true
 
 # QR code generation for LAN mode CA cert URL
 qrcode = { version = "0.14", default-features = false }

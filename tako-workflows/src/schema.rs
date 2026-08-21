@@ -1,7 +1,5 @@
 //! SQLite schema for the workflow engine. Kept in sync with the JS/Go SDKs.
 
-use turso::Connection;
-
 pub(crate) const SCHEMA_SQL: &str = r#"
 PRAGMA synchronous = NORMAL;
 PRAGMA foreign_keys = ON;
@@ -71,6 +69,6 @@ CREATE INDEX IF NOT EXISTS idx_event_waiters_expiry
   WHERE expires_at IS NOT NULL;
 "#;
 
-pub(crate) async fn init(conn: &Connection) -> turso::Result<()> {
-    conn.execute_batch(SCHEMA_SQL).await
+pub(crate) fn init(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(SCHEMA_SQL)
 }

@@ -1,11 +1,9 @@
 use parking_lot::Mutex;
+use rusqlite::types::Value;
+use rusqlite::{Connection, params_from_iter};
 use std::collections::HashMap;
 use std::path::Path;
 use tako_core::{EnqueueOpts, EnqueueRunResponse, RunPayload, ScheduleSpec};
-use turso::{Connection, Value, params_from_iter};
-
-pub(crate) use tako_sqlite::block_on;
-use tako_sqlite::commit_or_rollback;
 
 use super::{RunsDbError, ScheduleRow, clamp_lease_ms, now_ms};
 use crate::schema;
@@ -22,14 +20,8 @@ impl SqliteRunsDb {
             std::fs::create_dir_all(parent)
                 .map_err(|e| RunsDbError::Storage(format!("create workflow dir: {e}")))?;
         }
-        let path = path
-            .to_str()
-            .ok_or_else(|| RunsDbError::Storage("non-UTF-8 workflow db path".into()))?;
-        let conn = block_on(async {
-            let conn = tako_sqlite::open_local(path).await?;
-            schema::init(&conn).await?;
-            Ok::<_, turso::Error>(conn)
-        })?;
+        let conn = tako_sqlite::open_local(path)?;
+        schema::init(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -37,36 +29,27 @@ impl SqliteRunsDb {
 
     #[cfg(test)]
     pub(super) fn open_in_memory() -> Result<Self, RunsDbError> {
-        let conn = block_on(async {
-            let conn = tako_sqlite::open_in_memory().await?;
-            schema::init(&conn).await?;
-            Ok::<_, turso::Error>(conn)
-        })?;
+        let conn = tako_sqlite::open_in_memory()?;
+        schema::init(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
     }
 
     #[cfg(test)]
-    pub(super) fn raw_execute(&self, sql: &str, params: impl turso::IntoParams) {
+    pub(super) fn raw_execute(&self, sql: &str, params: impl rusqlite::Params) {
         let conn = self.conn.lock();
-        block_on(conn.execute(sql, params)).expect("raw execute");
+        conn.execute(sql, params).expect("raw execute");
     }
 
     #[cfg(test)]
-    pub(super) fn raw_query_values(&self, sql: &str, params: impl turso::IntoParams) -> Vec<Value> {
+    pub(super) fn raw_query_values(&self, sql: &str, params: impl rusqlite::Params) -> Vec<Value> {
         let conn = self.conn.lock();
-        block_on(async {
-            let mut rows = conn.query(sql, params).await.expect("raw query");
-            let row = rows
-                .next()
-                .await
-                .expect("raw row")
-                .expect("no row returned");
-            (0..row.column_count())
-                .map(|i| row.get_value(i).expect("column value"))
-                .collect()
+        conn.query_row(sql, params, |row| {
+            let n = row.as_ref().column_count();
+            (0..n).map(|i| row.get(i)).collect()
         })
+        .expect("raw query")
     }
 
     pub(super) fn enqueue(
@@ -83,51 +66,45 @@ impl SqliteRunsDb {
         let id = nanoid::nanoid!();
 
         let mut conn = self.conn.lock();
-        block_on(async {
-            let tx = conn.transaction().await?;
-            let result: Result<EnqueueRunResponse, RunsDbError> = async {
-                if let Some(key) = unique_key {
-                    let mut stmt = tx
-                        .prepare_cached(
-                            "SELECT id FROM runs WHERE unique_key = ?1 AND status IN ('pending','running') LIMIT 1",
-                        )
-                        .await?;
-                    let mut rows = stmt.query((key,)).await?;
-                    if let Some(row) = rows.next().await? {
-                        let id: String = row.get(0)?;
-                        return Ok(EnqueueRunResponse {
-                            id,
-                            deduplicated: true,
-                        });
-                    }
+        let tx = conn.transaction()?;
+        if let Some(key) = unique_key {
+            match tx.query_row(
+                "SELECT id FROM runs WHERE unique_key = ?1 AND status IN ('pending','running') LIMIT 1",
+                [key],
+                |row| row.get(0),
+            ) {
+                Ok(id) => {
+                    tx.commit()?;
+                    return Ok(EnqueueRunResponse {
+                        id,
+                        deduplicated: true,
+                    });
                 }
-
-                let mut stmt = tx
-                    .prepare_cached(
-                        "INSERT INTO runs
-                         (id, name, payload, status, attempts, max_attempts, run_at, lease_until, worker_id,
-                          last_error, created_at, unique_key)
-                         VALUES (?1, ?2, ?3, 'pending', 0, ?4, ?5, NULL, NULL, NULL, ?6, ?7)",
-                    )
-                    .await?;
-                stmt.execute((
-                    id.as_str(),
-                    name,
-                    payload_json.as_str(),
-                    max_attempts,
-                    run_at,
-                    now_ms,
-                    unique_key,
-                ))
-                .await?;
-
-                Ok(EnqueueRunResponse {
-                    id: id.clone(),
-                    deduplicated: false,
-                })
+                Err(rusqlite::Error::QueryReturnedNoRows) => {}
+                Err(e) => return Err(e.into()),
             }
-            .await;
-            commit_or_rollback(tx, result).await
+        }
+
+        tx.execute(
+            "INSERT INTO runs
+             (id, name, payload, status, attempts, max_attempts, run_at, lease_until, worker_id,
+              last_error, created_at, unique_key)
+             VALUES (?1, ?2, ?3, 'pending', 0, ?4, ?5, NULL, NULL, NULL, ?6, ?7)",
+            (
+                id.as_str(),
+                name,
+                payload_json.as_str(),
+                max_attempts,
+                run_at,
+                now_ms,
+                unique_key,
+            ),
+        )?;
+
+        tx.commit()?;
+        Ok(EnqueueRunResponse {
+            id,
+            deduplicated: false,
         })
     }
 
@@ -164,36 +141,34 @@ impl SqliteRunsDb {
         }
 
         let conn = self.conn.lock();
-        let (claimed, step_rows) = block_on(async {
-            let mut stmt = conn.prepare_cached(&sql).await?;
-            let mut rows = stmt.query(params_from_iter(params)).await?;
-            let claimed = match rows.next().await? {
-                Some(row) => (
-                    row.get::<String>(0)?,
-                    row.get::<String>(1)?,
-                    row.get::<String>(2)?,
-                    row.get::<String>(3)?,
-                    row.get::<i64>(4)? as u32,
-                    row.get::<i64>(5)? as u32,
-                    row.get::<i64>(6)?,
-                ),
-                None => return Ok::<_, RunsDbError>((None, Vec::new())),
-            };
-            drop(rows);
-
-            let mut step_stmt = conn
-                .prepare_cached("SELECT name, result FROM steps WHERE run_id = ?1")
-                .await?;
-            let mut rows = step_stmt.query((claimed.0.as_str(),)).await?;
-            let mut step_rows = Vec::new();
-            while let Some(row) = rows.next().await? {
-                step_rows.push((row.get::<String>(0)?, row.get::<String>(1)?));
+        let claimed = {
+            let mut stmt = conn.prepare_cached(&sql)?;
+            let mut rows = stmt.query(params_from_iter(params))?;
+            match rows.next()? {
+                Some(row) => Some((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)? as u32,
+                    row.get::<_, i64>(5)? as u32,
+                    row.get::<_, i64>(6)?,
+                )),
+                None => None,
             }
-            Ok((Some(claimed), step_rows))
-        })?;
+        };
 
         let Some(claimed) = claimed else {
             return Ok(None);
+        };
+
+        let step_rows = {
+            let mut step_stmt =
+                conn.prepare_cached("SELECT name, result FROM steps WHERE run_id = ?1")?;
+            let rows = step_stmt.query_map([claimed.0.as_str()], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()?
         };
 
         let mut state_map = serde_json::Map::new();
@@ -222,11 +197,11 @@ impl SqliteRunsDb {
     ) -> Result<(), RunsDbError> {
         let lease_until = now_ms().saturating_add(clamp_lease_ms(lease_ms));
         let conn = self.conn.lock();
-        let rows = block_on(conn.execute(
+        let rows = conn.execute(
             "UPDATE runs SET lease_until = ?1
              WHERE id = ?2 AND worker_id = ?3 AND status='running'",
             (lease_until, id, worker_id),
-        ))?;
+        )?;
         if rows == 0 {
             return Err(RunsDbError::StaleWorker);
         }
@@ -242,43 +217,36 @@ impl SqliteRunsDb {
     ) -> Result<(), RunsDbError> {
         let r = serde_json::to_string(result)?;
         let conn = self.conn.lock();
-        block_on(async {
-            let rows = conn
-                .execute(
-                    "INSERT OR IGNORE INTO steps (run_id, name, result, completed_at)
-                     SELECT ?1, ?2, ?3, ?4
-                     FROM runs WHERE id = ?1 AND worker_id = ?5 AND status='running'",
-                    (run_id, step_name, r.as_str(), now_ms(), worker_id),
-                )
-                .await?;
-            // rows == 0 can mean "step already saved (IGNORE)" or "stale
-            // worker". Distinguish by probing the run's worker_id.
-            if rows == 0 {
-                let mut probe = conn
-                    .query(
-                        "SELECT worker_id FROM runs WHERE id = ?1 AND status='running'",
-                        (run_id,),
-                    )
-                    .await?;
-                match probe.next().await? {
-                    Some(row) => match row.get::<Option<String>>(0)? {
-                        Some(wid) if wid == worker_id => {}
-                        _ => return Err(RunsDbError::StaleWorker),
-                    },
-                    None => return Err(RunsDbError::StaleWorker),
-                }
+        let rows = conn.execute(
+            "INSERT OR IGNORE INTO steps (run_id, name, result, completed_at)
+             SELECT ?1, ?2, ?3, ?4
+             FROM runs WHERE id = ?1 AND worker_id = ?5 AND status='running'",
+            (run_id, step_name, r.as_str(), now_ms(), worker_id),
+        )?;
+        // rows == 0 can mean "step already saved (IGNORE)" or "stale
+        // worker". Distinguish by probing the run's worker_id.
+        if rows == 0 {
+            match conn.query_row(
+                "SELECT worker_id FROM runs WHERE id = ?1 AND status='running'",
+                [run_id],
+                |row| row.get::<_, Option<String>>(0),
+            ) {
+                Ok(Some(wid)) if wid == worker_id => {}
+                Ok(_) => return Err(RunsDbError::StaleWorker),
+                Err(rusqlite::Error::QueryReturnedNoRows) => return Err(RunsDbError::StaleWorker),
+                Err(e) => return Err(e.into()),
             }
-            Ok(())
-        })
+        }
+        Ok(())
     }
 
     pub(super) fn complete(&self, id: &str, worker_id: &str) -> Result<(), RunsDbError> {
         let conn = self.conn.lock();
-        let rows = block_on(conn.execute(
+        let rows = conn.execute(
             "UPDATE runs SET status='succeeded', worker_id=NULL, lease_until=NULL
              WHERE id = ?1 AND worker_id = ?2 AND status='running'",
             (id, worker_id),
-        ))?;
+        )?;
         if rows == 0 {
             return Err(RunsDbError::StaleWorker);
         }
@@ -292,11 +260,11 @@ impl SqliteRunsDb {
         reason: Option<&str>,
     ) -> Result<(), RunsDbError> {
         let conn = self.conn.lock();
-        let rows = block_on(conn.execute(
+        let rows = conn.execute(
             "UPDATE runs SET status='cancelled', last_error=?1, worker_id=NULL, lease_until=NULL
              WHERE id = ?2 AND worker_id = ?3 AND status='running'",
             (reason, id, worker_id),
-        ))?;
+        )?;
         if rows == 0 {
             return Err(RunsDbError::StaleWorker);
         }
@@ -313,20 +281,20 @@ impl SqliteRunsDb {
     ) -> Result<(), RunsDbError> {
         let conn = self.conn.lock();
         let rows = if finalize {
-            block_on(conn.execute(
+            conn.execute(
                 "UPDATE runs SET status='dead', last_error=?1, worker_id=NULL, lease_until=NULL
                  WHERE id = ?2 AND worker_id = ?3 AND status='running'",
                 (error, id, worker_id),
-            ))?
+            )?
         } else {
             let next = next_run_at_ms.ok_or_else(|| {
                 RunsDbError::Storage("fail(finalize=false) requires next_run_at_ms".into())
             })?;
-            block_on(conn.execute(
+            conn.execute(
                 "UPDATE runs SET status='pending', last_error=?1, worker_id=NULL, lease_until=NULL, run_at=?2
                  WHERE id = ?3 AND worker_id = ?4 AND status='running'",
                 (error, next, id, worker_id),
-            ))?
+            )?
         };
         if rows == 0 {
             return Err(RunsDbError::StaleWorker);
@@ -342,12 +310,12 @@ impl SqliteRunsDb {
     ) -> Result<(), RunsDbError> {
         let conn = self.conn.lock();
         let run_at = wake_at_ms.unwrap_or(i64::MAX);
-        let rows = block_on(conn.execute(
+        let rows = conn.execute(
             "UPDATE runs SET status='pending', worker_id=NULL, lease_until=NULL,
                               run_at=?1, attempts=attempts-1
              WHERE id = ?2 AND worker_id = ?3 AND status='running'",
             (run_at, id, worker_id),
-        ))?;
+        )?;
         if rows == 0 {
             return Err(RunsDbError::StaleWorker);
         }
@@ -356,64 +324,46 @@ impl SqliteRunsDb {
 
     pub(super) fn reclaim_expired(&self) -> Result<u64, RunsDbError> {
         let conn = self.conn.lock();
-        let changes = block_on(conn.execute(
+        let changes = conn.execute(
             "UPDATE runs SET status='pending', worker_id=NULL, lease_until=NULL
              WHERE status='running' AND lease_until IS NOT NULL AND lease_until < ?1",
             (now_ms(),),
-        ))?;
-        Ok(changes)
+        )?;
+        Ok(changes as u64)
     }
 
     pub(super) fn reclaim_expired_with_workers(&self) -> Result<Vec<String>, RunsDbError> {
         let mut conn = self.conn.lock();
-        block_on(async {
-            let tx = conn.transaction().await?;
-            let result: Result<Vec<String>, RunsDbError> = async {
-                let mut stmt = tx
-                    .prepare(
-                        "SELECT worker_id FROM runs
-                         WHERE status='running' AND lease_until IS NOT NULL
-                           AND lease_until < ?1 AND worker_id IS NOT NULL",
-                    )
-                    .await?;
-                let mut rows = stmt.query((now_ms(),)).await?;
-                let mut workers = Vec::new();
-                while let Some(row) = rows.next().await? {
-                    workers.push(row.get::<String>(0)?);
-                }
-                drop(rows);
-                tx.execute(
-                    "UPDATE runs SET status='pending', worker_id=NULL, lease_until=NULL
-                     WHERE status='running' AND lease_until IS NOT NULL AND lease_until < ?1",
-                    (now_ms(),),
-                )
-                .await?;
-                Ok(workers)
-            }
-            .await;
-            commit_or_rollback(tx, result).await
-        })
+        let tx = conn.transaction()?;
+        let workers = {
+            let mut stmt = tx.prepare(
+                "SELECT worker_id FROM runs
+                 WHERE status='running' AND lease_until IS NOT NULL
+                   AND lease_until < ?1 AND worker_id IS NOT NULL",
+            )?;
+            let rows = stmt.query_map((now_ms(),), |row| row.get(0))?;
+            rows.collect::<Result<Vec<String>, _>>()?
+        };
+        tx.execute(
+            "UPDATE runs SET status='pending', worker_id=NULL, lease_until=NULL
+             WHERE status='running' AND lease_until IS NOT NULL AND lease_until < ?1",
+            (now_ms(),),
+        )?;
+        tx.commit()?;
+        Ok(workers)
     }
 
     pub(super) fn in_flight_by_worker(&self) -> Result<HashMap<String, u32>, RunsDbError> {
         let conn = self.conn.lock();
-        block_on(async {
-            let mut rows = conn
-                .query(
-                    "SELECT worker_id, COUNT(*) FROM runs
-                     WHERE status='running' AND worker_id IS NOT NULL
-                     GROUP BY worker_id",
-                    (),
-                )
-                .await?;
-            let mut out = HashMap::new();
-            while let Some(row) = rows.next().await? {
-                let worker: String = row.get(0)?;
-                let count: i64 = row.get(1)?;
-                out.insert(worker, count as u32);
-            }
-            Ok(out)
-        })
+        let mut stmt = conn.prepare(
+            "SELECT worker_id, COUNT(*) FROM runs
+             WHERE status='running' AND worker_id IS NOT NULL
+             GROUP BY worker_id",
+        )?;
+        let rows = stmt.query_map((), |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u32))
+        })?;
+        Ok(rows.collect::<Result<HashMap<_, _>, _>>()?)
     }
 
     pub(super) fn wait_for_event(
@@ -425,31 +375,23 @@ impl SqliteRunsDb {
         timeout_at_ms: Option<i64>,
     ) -> Result<(), RunsDbError> {
         let mut conn = self.conn.lock();
-        block_on(async {
-            let tx = conn.transaction().await?;
-            let result: Result<(), RunsDbError> = async {
-                let rows = tx
-                    .execute(
-                        "UPDATE runs SET status='pending', worker_id=NULL, lease_until=NULL,
-                                          run_at=?1, attempts=attempts-1
-                         WHERE id = ?2 AND worker_id = ?3 AND status='running'",
-                        (timeout_at_ms.unwrap_or(i64::MAX), run_id, worker_id),
-                    )
-                    .await?;
-                if rows == 0 {
-                    return Err(RunsDbError::StaleWorker);
-                }
-                tx.execute(
-                    "INSERT OR REPLACE INTO event_waiters (run_id, step_name, event_name, expires_at)
-                     VALUES (?1, ?2, ?3, ?4)",
-                    (run_id, step_name, event_name, timeout_at_ms),
-                )
-                .await?;
-                Ok(())
-            }
-            .await;
-            commit_or_rollback(tx, result).await
-        })
+        let tx = conn.transaction()?;
+        let rows = tx.execute(
+            "UPDATE runs SET status='pending', worker_id=NULL, lease_until=NULL,
+                              run_at=?1, attempts=attempts-1
+             WHERE id = ?2 AND worker_id = ?3 AND status='running'",
+            (timeout_at_ms.unwrap_or(i64::MAX), run_id, worker_id),
+        )?;
+        if rows == 0 {
+            return Err(RunsDbError::StaleWorker);
+        }
+        tx.execute(
+            "INSERT OR REPLACE INTO event_waiters (run_id, step_name, event_name, expires_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            (run_id, step_name, event_name, timeout_at_ms),
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 
     pub(super) fn signal(
@@ -460,140 +402,110 @@ impl SqliteRunsDb {
         let payload_json = serde_json::to_string(payload)?;
         let now = now_ms();
         let mut conn = self.conn.lock();
-        block_on(async {
-            let tx = conn.transaction().await?;
-            let result: Result<u64, RunsDbError> = async {
-                // Materialize the event payload as a step result for every waiter.
-                // Then wake the runs and clear the waiter rows.
-                let mut stmt = tx
-                    .prepare("SELECT run_id, step_name FROM event_waiters WHERE event_name = ?1")
-                    .await?;
-                let mut rows = stmt.query((event_name,)).await?;
-                let mut waiters: Vec<(String, String)> = Vec::new();
-                while let Some(row) = rows.next().await? {
-                    waiters.push((row.get(0)?, row.get(1)?));
-                }
-                drop(rows);
+        let tx = conn.transaction()?;
+        let waiters = {
+            let mut stmt =
+                tx.prepare("SELECT run_id, step_name FROM event_waiters WHERE event_name = ?1")?;
+            let rows = stmt.query_map((event_name,), |row| Ok((row.get(0)?, row.get(1)?)))?;
+            rows.collect::<Result<Vec<(String, String)>, _>>()?
+        };
 
-                let mut woken = 0u64;
-                for (run_id, step_name) in &waiters {
-                    tx.execute(
-                        "INSERT OR IGNORE INTO steps (run_id, name, result, completed_at)
-                         VALUES (?1, ?2, ?3, ?4)",
-                        (run_id.as_str(), step_name.as_str(), payload_json.as_str(), now),
-                    )
-                    .await?;
-                    tx.execute(
-                        "UPDATE runs SET status='pending', run_at=?1 WHERE id = ?2 AND status='pending'",
-                        (now, run_id.as_str()),
-                    )
-                    .await?;
-                    tx.execute(
-                        "DELETE FROM event_waiters WHERE run_id = ?1 AND step_name = ?2",
-                        (run_id.as_str(), step_name.as_str()),
-                    )
-                    .await?;
-                    woken += 1;
-                }
-                Ok(woken)
-            }
-            .await;
-            commit_or_rollback(tx, result).await
-        })
+        let mut woken = 0u64;
+        for (run_id, step_name) in &waiters {
+            tx.execute(
+                "INSERT OR IGNORE INTO steps (run_id, name, result, completed_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                (
+                    run_id.as_str(),
+                    step_name.as_str(),
+                    payload_json.as_str(),
+                    now,
+                ),
+            )?;
+            tx.execute(
+                "UPDATE runs SET status='pending', run_at=?1 WHERE id = ?2 AND status='pending'",
+                (now, run_id.as_str()),
+            )?;
+            tx.execute(
+                "DELETE FROM event_waiters WHERE run_id = ?1 AND step_name = ?2",
+                (run_id.as_str(), step_name.as_str()),
+            )?;
+            woken += 1;
+        }
+        tx.commit()?;
+        Ok(woken)
     }
 
     pub(super) fn pending_count(&self) -> Result<u64, RunsDbError> {
         let conn = self.conn.lock();
-        block_on(async {
-            let mut rows = conn
-                .query("SELECT COUNT(*) FROM runs WHERE status='pending'", ())
-                .await?;
-            let row = rows
-                .next()
-                .await?
-                .ok_or_else(|| RunsDbError::Storage("count query returned no row".into()))?;
-            Ok(row.get::<i64>(0)? as u64)
-        })
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM runs WHERE status='pending'",
+            (),
+            |row| row.get(0),
+        )?;
+        Ok(count as u64)
     }
 
     pub(super) fn has_runnable_work(&self) -> Result<bool, RunsDbError> {
         let conn = self.conn.lock();
-        block_on(async {
-            let mut rows = conn
-                .query(
-                    "SELECT EXISTS(
-                        SELECT 1 FROM runs
-                        WHERE status='pending' AND run_at <= ?1
-                        LIMIT 1
-                     )",
-                    (now_ms(),),
-                )
-                .await?;
-            let row = rows
-                .next()
-                .await?
-                .ok_or_else(|| RunsDbError::Storage("exists query returned no row".into()))?;
-            Ok(row.get::<i64>(0)? != 0)
-        })
+        let exists: i64 = conn.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM runs
+                WHERE status='pending' AND run_at <= ?1
+                LIMIT 1
+             )",
+            (now_ms(),),
+            |row| row.get(0),
+        )?;
+        Ok(exists != 0)
     }
 
     pub(super) fn replace_schedules(&self, schedules: &[ScheduleSpec]) -> Result<(), RunsDbError> {
         let mut conn = self.conn.lock();
-        block_on(async {
-            let tx = conn.transaction().await?;
-            let result: Result<(), RunsDbError> = async {
-                if schedules.is_empty() {
-                    tx.execute("DELETE FROM schedules", ()).await?;
-                } else {
-                    let placeholders = schedules.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-                    let sql = format!("DELETE FROM schedules WHERE name NOT IN ({})", placeholders);
-                    let params: Vec<Value> = schedules
-                        .iter()
-                        .map(|s| Value::Text(s.name.clone()))
-                        .collect();
-                    tx.execute(&sql, params_from_iter(params)).await?;
-                }
+        let tx = conn.transaction()?;
+        if schedules.is_empty() {
+            tx.execute("DELETE FROM schedules", ())?;
+        } else {
+            let placeholders = schedules.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            let sql = format!("DELETE FROM schedules WHERE name NOT IN ({})", placeholders);
+            let params: Vec<Value> = schedules
+                .iter()
+                .map(|s| Value::Text(s.name.clone()))
+                .collect();
+            tx.execute(&sql, params_from_iter(params))?;
+        }
 
-                let now_ms = chrono::Utc::now().timestamp_millis();
-                for s in schedules {
-                    tx.execute(
-                        "INSERT INTO schedules (name, cron, last_run_at) VALUES (?1, ?2, ?3)
-                         ON CONFLICT(name) DO UPDATE SET cron = excluded.cron",
-                        (s.name.as_str(), s.cron.as_str(), now_ms),
-                    )
-                    .await?;
-                }
-                Ok(())
-            }
-            .await;
-            commit_or_rollback(tx, result).await
-        })
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        for s in schedules {
+            tx.execute(
+                "INSERT INTO schedules (name, cron, last_run_at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(name) DO UPDATE SET cron = excluded.cron",
+                (s.name.as_str(), s.cron.as_str(), now_ms),
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     pub(super) fn list_schedules(&self) -> Result<Vec<ScheduleRow>, RunsDbError> {
         let conn = self.conn.lock();
-        block_on(async {
-            let mut rows = conn
-                .query("SELECT name, cron, last_run_at FROM schedules", ())
-                .await?;
-            let mut out = Vec::new();
-            while let Some(row) = rows.next().await? {
-                out.push(ScheduleRow {
-                    name: row.get(0)?,
-                    cron: row.get(1)?,
-                    last_run_at: row.get::<Option<i64>>(2)?,
-                });
-            }
-            Ok(out)
-        })
+        let mut stmt = conn.prepare("SELECT name, cron, last_run_at FROM schedules")?;
+        let rows = stmt.query_map((), |row| {
+            Ok(ScheduleRow {
+                name: row.get(0)?,
+                cron: row.get(1)?,
+                last_run_at: row.get::<_, Option<i64>>(2)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
     pub(super) fn set_schedule_last_run_at(&self, name: &str, ts: i64) -> Result<(), RunsDbError> {
         let conn = self.conn.lock();
-        block_on(conn.execute(
+        conn.execute(
             "UPDATE schedules SET last_run_at = ?1 WHERE name = ?2",
             (ts, name),
-        ))?;
+        )?;
         Ok(())
     }
 }
