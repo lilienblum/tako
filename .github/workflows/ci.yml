@@ -103,7 +103,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: "1.26"
+          go-version: "1.27"
 
       - name: Format check
         run: |
@@ -325,7 +325,7 @@ jobs:
     if: needs.detect-changes.outputs.website_only != 'true'
     runs-on: ubuntu-latest
     # Build inside Debian 11 container for glibc 2.31 compat (supports Debian 11+, Ubuntu 22.04+, RHEL 9+, Amazon Linux 2023)
-    container: rust:1.97-bullseye@sha256:02d78ca3f928195c2a907543de778adfd728ad7e2a24fdc6aef582b7c77842e0
+    container: rust:1.98-bullseye@sha256:97cc99038824c3cee60ae9d0f75e0171ae0ae8b80786d26d0e7d21956f8d0164
     defaults:
       run:
         shell: bash
@@ -395,7 +395,7 @@ jobs:
     # 24.04-arm is the only GitHub-hosted ARM runner available
     runs-on: ubuntu-24.04-arm
     # Build inside Debian 11 container for glibc 2.31 compat (same as x86_64)
-    container: rust:1.97-bullseye@sha256:02d78ca3f928195c2a907543de778adfd728ad7e2a24fdc6aef582b7c77842e0
+    container: rust:1.98-bullseye@sha256:97cc99038824c3cee60ae9d0f75e0171ae0ae8b80786d26d0e7d21956f8d0164
     defaults:
       run:
         shell: bash
