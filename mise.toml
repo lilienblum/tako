@@ -1,9 +1,9 @@
 [tools]
-rust = "1.97"
-bun = "1.3"
-go = "1.26"
+rust = "1.98"
+bun = "1.4.0"
+go = "1.27.0"
 just = "1"
-hk = "1.55.0"
+hk = "1.56.1"
 
 [bootstrap.packages]
 "brew:lychee" = "latest"
