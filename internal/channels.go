@@ -2,14 +2,9 @@ package internal
 
 import (
 	"encoding/json"
-	"fmt"
-	"net/url"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
-
-	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 const (
@@ -296,49 +291,6 @@ func (r *ChannelRegistry) Authorize(input ChannelAuthorizeInput) (ChannelAuthori
 	}, true, true
 }
 
-// ValidateParams validates and coerces channel query params against the
-// registered JSON Schema.
-func (r *ChannelRegistry) ValidateParams(channel string, query string) (json.RawMessage, error) {
-	definition := r.Lookup(channel)
-	if definition == nil {
-		return nil, fmt.Errorf("channel %q is not registered", channel)
-	}
-	if len(definition.ParamsSchema) == 0 {
-		return json.RawMessage(`{}`), nil
-	}
-
-	var schema map[string]any
-	if err := json.Unmarshal(definition.ParamsSchema, &schema); err != nil {
-		return nil, fmt.Errorf("invalid params schema: %w", err)
-	}
-
-	values, err := url.ParseQuery(query)
-	if err != nil {
-		return nil, err
-	}
-	params := make(map[string]any, len(values))
-	for key, vals := range values {
-		if len(vals) == 0 {
-			continue
-		}
-		params[key] = coerceParamValue(schema, key, vals[len(vals)-1])
-	}
-
-	compiled, err := compileSchema(schema)
-	if err != nil {
-		return nil, err
-	}
-	if err := compiled.Validate(params); err != nil {
-		return nil, err
-	}
-
-	b, err := json.Marshal(params)
-	if err != nil {
-		return nil, err
-	}
-	return json.RawMessage(b), nil
-}
-
 // Metadata returns sorted channel metadata for discovery.
 func (r *ChannelRegistry) Metadata() []ChannelDefinitionMeta {
 	r.mu.RLock()
@@ -365,45 +317,4 @@ func (r *ChannelRegistry) Metadata() []ChannelDefinitionMeta {
 		})
 	}
 	return out
-}
-
-func compileSchema(doc any) (*jsonschema.Schema, error) {
-	compiler := jsonschema.NewCompiler()
-	compiler.DefaultDraft(jsonschema.Draft2020)
-	if err := compiler.AddResource("schema.json", doc); err != nil {
-		return nil, err
-	}
-	return compiler.Compile("schema.json")
-}
-
-func coerceParamValue(schema map[string]any, key string, raw string) any {
-	expected := propertyType(schema, key)
-	switch expected {
-	case "integer":
-		if value, err := strconv.ParseInt(raw, 10, 64); err == nil {
-			return value
-		}
-	case "number":
-		if value, err := strconv.ParseFloat(raw, 64); err == nil {
-			return value
-		}
-	case "boolean":
-		if value, err := strconv.ParseBool(raw); err == nil {
-			return value
-		}
-	}
-	return raw
-}
-
-func propertyType(schema map[string]any, key string) string {
-	properties, ok := schema["properties"].(map[string]any)
-	if !ok {
-		return ""
-	}
-	property, ok := properties[key].(map[string]any)
-	if !ok {
-		return ""
-	}
-	value, _ := property["type"].(string)
-	return value
 }

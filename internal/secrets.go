@@ -33,14 +33,6 @@ func BootstrapFromRuntime() *Bootstrap {
 	return bootstrapFromRuntimeFd(3)
 }
 
-// BootstrapFromFd3 reads the bootstrap envelope from file descriptor 3.
-//
-// Returns nil if fd 3 does not exist (EBADF — not running under Tako).
-// Exits hard on invalid JSON (broken Tako launch path).
-func BootstrapFromFd3() *Bootstrap {
-	return bootstrapFromFd(3)
-}
-
 func bootstrapFromRuntimeFd(fd int) *Bootstrap {
 	if b := bootstrapFromFd(fd); b != nil {
 		clearBootstrapEnv()

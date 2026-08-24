@@ -84,31 +84,6 @@ func TestAuthorizeRunsVerifyAndReturnsSubject(t *testing.T) {
 	}
 }
 
-func TestValidateParamsCoercesAndChecks(t *testing.T) {
-	t.Parallel()
-
-	r := NewChannelRegistry()
-	r.Register("chat", ChannelDefinition{
-		ParamsSchema: []byte(`{"type":"object","properties":{"roomId":{"type":"string","minLength":1},"limit":{"type":"integer"}},"required":["roomId"]}`),
-	})
-
-	v, err := r.ValidateParams("chat", "roomId=r1&limit=10")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var got map[string]any
-	if err := json.Unmarshal(v, &got); err != nil {
-		t.Fatal(err)
-	}
-	if got["roomId"] != "r1" || got["limit"].(float64) != 10 {
-		t.Fatalf("got %#v", got)
-	}
-
-	if _, err := r.ValidateParams("chat", "limit=10"); err == nil {
-		t.Fatal("expected error for missing required roomId")
-	}
-}
-
 func TestRegistryMetadataSerializesPublicAuthAsFalse(t *testing.T) {
 	t.Parallel()
 

@@ -343,50 +343,6 @@ export interface ChannelHandle {
 }
 
 /**
- * Loose runtime shape for the default export of a channel module.
- * Unparameterized channels expose `publish/subscribe/connect` directly;
- * parameterized channels are callable `(params)` returning a handle. Typed
- * as an intersection so both usages compile — runtime enforces which one
- * is valid for a given channel.
- */
-export type ChannelAccessorEntry = ChannelHandle &
-  ((params: Record<string, unknown>) => ChannelHandle);
-
-function makeHandle(
-  definition: ChannelDefinition,
-  resolvedName: string,
-  params: Record<string, unknown> = {},
-): ChannelHandle {
-  const isWs = definition.transport === "ws";
-  const channel = new Channel(resolvedName, isWs ? "ws" : undefined, params);
-  const handle: ChannelHandle = {
-    publish: channel.publish.bind(channel),
-    subscribe: channel.subscribe.bind(channel),
-  };
-  if (isWs) {
-    handle.connect = channel.connect.bind(channel);
-  }
-  return handle;
-}
-
-function buildAccessorEntry(definition: ChannelDefinition, baseName: string): ChannelAccessorEntry {
-  if (!definition.hasParams) {
-    return makeHandle(definition, baseName) as ChannelAccessorEntry;
-  }
-  return ((params: Record<string, unknown>) =>
-    makeHandle(definition, baseName, params)) as ChannelAccessorEntry;
-}
-
-/** Convert a camelCase prop to the kebab-case channel file name. */
-function propToChannelName(prop: string): string {
-  return prop
-    .replace(/([a-z])([A-Z])/g, "$1-$2")
-    .replace(/([a-zA-Z])([0-9])/g, "$1-$2")
-    .replace(/([0-9])([a-zA-Z])/g, "$1-$2")
-    .toLowerCase();
-}
-
-/**
  * In-process registry of discovered channel definitions.
  *
  * The Tako runtime uses this for channel discovery, auth callbacks, and
@@ -479,30 +435,6 @@ export class ChannelRegistry {
       ? { ok: true, ...config }
       : { ok: true, ...config, subject: verdict.subject };
   }
-}
-
-/**
- * Wrap a {@link ChannelRegistry} in a Proxy so property access via
- * `accessor.<name>` returns a {@link ChannelAccessorEntry} for the matching
- * discovered channel (the prop is kebab-cased first). Existing registry
- * methods (`register`, `resolve`, `authorize`, `clear`, `all`, `findByName`)
- * pass through.
- */
-export function withChannelAccessor(
-  registry: ChannelRegistry,
-): ChannelRegistry & Record<string, ChannelAccessorEntry> {
-  const handler: ProxyHandler<ChannelRegistry> = {
-    get(target, prop, receiver) {
-      if (typeof prop === "string" && !(prop in target)) {
-        const entry = target.findByName(propToChannelName(prop));
-        if (entry) {
-          return buildAccessorEntry(entry.definition, entry.name);
-        }
-      }
-      return Reflect.get(target, prop, receiver);
-    },
-  };
-  return new Proxy(registry, handler) as ChannelRegistry & Record<string, ChannelAccessorEntry>;
 }
 
 function definitionLifecycleConfig(definition: ChannelDefinition) {
