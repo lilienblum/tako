@@ -10,7 +10,7 @@ pub use tako::{InstallServerMode, ServerInstallPorts};
 use super::error::{SshError, SshResult};
 use russh::Disconnect;
 use russh::client::{self, Config, Handle, Handler};
-use russh::keys::{PublicKey, check_known_hosts_path};
+use russh::keys::{PublicKeyOrCertificate, check_known_hosts_path};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -154,15 +154,15 @@ impl Handler for SshHandler {
 
     fn check_server_key(
         &mut self,
-        server_public_key: &PublicKey,
+        server_public_key: &PublicKeyOrCertificate,
     ) -> impl Future<Output = std::result::Result<bool, Self::Error>> + Send {
         let host = self.host.clone();
         let port = self.port;
         let known_hosts_path = self.known_hosts_path.clone();
         let known_hosts_display = known_hosts_path.display().to_string();
-        let verification =
-            check_known_hosts_path(&host, port, server_public_key, &known_hosts_path)
-                .map_err(|error| error.to_string());
+        let key = server_public_key.public_key();
+        let verification = check_known_hosts_path(&host, port, &key, &known_hosts_path)
+            .map_err(|error| error.to_string());
 
         async move {
             match verification {
