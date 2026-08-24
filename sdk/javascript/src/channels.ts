@@ -330,19 +330,6 @@ interface RegistryEntry {
 }
 
 /**
- * Handle returned by the default export of a `<app_root>/channels/<name>.ts` file
- * (unparameterized) or by invoking a parameterized channel with its params.
- */
-export interface ChannelHandle {
-  /** Publish a message from server-side code through the Tako runtime. */
-  publish: Channel["publish"];
-  /** Subscribe to this channel over SSE. */
-  subscribe: Channel["subscribe"];
-  /** Open a WebSocket connection when the channel has handlers. */
-  connect?: Channel["connect"];
-}
-
-/**
  * In-process registry of discovered channel definitions.
  *
  * The Tako runtime uses this for channel discovery, auth callbacks, and
