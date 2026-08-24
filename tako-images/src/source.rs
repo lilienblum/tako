@@ -25,6 +25,7 @@ pub(crate) fn parse_source(source: &str) -> Result<ImageSource, ImageError> {
         || source.contains('\r')
         || source.contains('\n')
         || source.contains('#')
+        || path_has_dot_segments(source)
     {
         return Err(ImageError::InvalidSource);
     }
@@ -166,6 +167,11 @@ fn host_pattern_matches(pattern: &str, host: &str) -> bool {
     pattern == host
 }
 
+fn path_has_dot_segments(path: &str) -> bool {
+    path.split('/')
+        .any(|segment| segment == "." || segment == "..")
+}
+
 fn path_pattern_matches(pattern: &str, path: &str) -> bool {
     if pattern == "/**" {
         return path.starts_with('/');
@@ -268,6 +274,22 @@ mod tests {
             let ip: IpAddr = ip.parse().unwrap();
             assert!(ip_is_private_or_local(ip), "{ip} should be private/local");
         }
+    }
+
+    #[test]
+    fn parse_source_rejects_dot_segments() {
+        assert_eq!(
+            parse_source("/images/../../secret.png"),
+            Err(ImageError::InvalidSource)
+        );
+        assert_eq!(
+            parse_source("/images/./avatar.png"),
+            Err(ImageError::InvalidSource)
+        );
+        assert_eq!(
+            parse_source("https://cdn.example.com/uploads/../admin/secret.png"),
+            Err(ImageError::InvalidSource)
+        );
     }
 
     #[test]

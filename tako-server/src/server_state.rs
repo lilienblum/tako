@@ -205,6 +205,9 @@ impl ServerState {
                 },
             ));
         }
+        workflows.set_peer_auth(std::sync::Arc::new(|app, uid| {
+            crate::isolation::authorize_internal_socket_app(app, uid)
+        }));
 
         if tokio::runtime::Handle::try_current().is_ok() {
             workflows
@@ -575,6 +578,22 @@ impl ServerState {
                 vec![runtime_bin.into(), worker_entry.into()]
             }
         };
+        let workflow_lanes = match manifest.runtime.as_str() {
+            "go" | "container" => Vec::new(),
+            _ => {
+                let js_app_root = worker_env
+                    .get("TAKO_APP_ROOT")
+                    .map(String::as_str)
+                    .filter(|root| !root.trim().is_empty())
+                    .unwrap_or("src");
+                let workflows_dir = if js_app_root == "." {
+                    app_path.join("workflows")
+                } else {
+                    app_path.join(js_app_root).join("workflows")
+                };
+                crate::workflows::workflow_lanes_from_dir(&workflows_dir, 0, 500)
+            }
+        };
         let isolation = if manifest.runtime == "container" {
             None
         } else {
@@ -593,7 +612,7 @@ impl ServerState {
         let manager = self.workflows.clone();
         let result = manager
             .ensure(&app, move |_db_path| {
-                crate::workflows::worker_spec_for_command(
+                let mut spec = crate::workflows::worker_spec_for_command(
                     &app_for_spec,
                     0,       // workers (scale-to-zero)
                     500,     // concurrency
@@ -605,7 +624,9 @@ impl ServerState {
                     secrets,
                     storages,
                     isolation,
-                )
+                );
+                spec.lanes = workflow_lanes;
+                spec
             })
             .await;
 

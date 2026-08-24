@@ -56,15 +56,34 @@ pub async fn authorize_channel_request(
         .await
         .map_err(|_| ChannelError::AuthUnavailable)?;
 
-    match response.status().as_u16() {
-        200 => response
-            .json::<ChannelAuthResponse>()
-            .await
-            .map_err(|e| ChannelError::BadRequest(format!("invalid auth response: {e}"))),
-        403 => Err(ChannelError::Forbidden),
+    match map_channel_auth_http_status(response.status().as_u16()) {
+        Ok(()) => {
+            let auth = response
+                .json::<ChannelAuthResponse>()
+                .await
+                .map_err(|e| ChannelError::BadRequest(format!("invalid auth response: {e}")))?;
+            accept_channel_auth(auth)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+pub(crate) fn map_channel_auth_http_status(status: u16) -> Result<(), ChannelError> {
+    match status {
+        200 => Ok(()),
+        403 | 405 => Err(ChannelError::Forbidden),
         404 => Err(ChannelError::NotDefined),
-        405 => Ok(ChannelAuthResponse::denied_with_defaults()),
         _ => Err(ChannelError::AuthUnavailable),
+    }
+}
+
+pub(crate) fn accept_channel_auth(
+    auth: ChannelAuthResponse,
+) -> Result<ChannelAuthResponse, ChannelError> {
+    if auth.ok {
+        Ok(auth)
+    } else {
+        Err(ChannelError::Forbidden)
     }
 }
 
@@ -118,5 +137,43 @@ pub async fn dispatch_channel_message(
         403 => Err(ChannelError::Forbidden),
         404 => Err(ChannelError::NotDefined),
         _ => Err(ChannelError::AuthUnavailable),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn denied_http_statuses_are_errors() {
+        assert!(matches!(
+            map_channel_auth_http_status(403),
+            Err(ChannelError::Forbidden)
+        ));
+        assert!(matches!(
+            map_channel_auth_http_status(405),
+            Err(ChannelError::Forbidden)
+        ));
+        assert!(matches!(
+            map_channel_auth_http_status(404),
+            Err(ChannelError::NotDefined)
+        ));
+        assert!(map_channel_auth_http_status(200).is_ok());
+    }
+
+    #[test]
+    fn denied_auth_body_is_forbidden() {
+        assert!(matches!(
+            accept_channel_auth(ChannelAuthResponse {
+                ok: false,
+                subject: None,
+                transport: None,
+                replay_window_ms: 0,
+                inactivity_ttl_ms: 0,
+                keepalive_interval_ms: 0,
+                max_connection_lifetime_ms: 0,
+            }),
+            Err(ChannelError::Forbidden)
+        ));
     }
 }

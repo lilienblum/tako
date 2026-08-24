@@ -109,7 +109,12 @@ export function defineWorkflow<P = unknown>(
   return {
     definition,
     enqueue(payload, options) {
-      return requireRuntime().enqueue(name, payload, options);
+      const retries = options?.retries ?? runtimeOpts.retries;
+      return requireRuntime().enqueue(
+        name,
+        payload,
+        retries === undefined ? options : { ...options, retries },
+      );
     },
   };
 }

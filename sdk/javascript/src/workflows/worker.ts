@@ -367,7 +367,7 @@ export class Worker {
 
       // Regular error → run-level retry path.
       const message = err instanceof Error ? err.message : String(err);
-      const maxAttempts = reg.retry?.maxAttempts ?? run.retries + 1;
+      const maxAttempts = run.retries + 1;
       const finalize = run.attempts >= maxAttempts;
       const base = reg.retry?.backoff?.base ?? this.baseBackoffMs;
       const max = reg.retry?.backoff?.max ?? this.maxBackoffMs;

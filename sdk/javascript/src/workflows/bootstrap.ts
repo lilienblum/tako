@@ -27,6 +27,7 @@ import {
   installChannelSocketPublisherFromEnv,
 } from "../tako/socket";
 import { setWorkflowRuntime } from "./define";
+import { DEFAULT_WORKER_GROUP } from "./discovery";
 import { workflowsEngine } from "./engine";
 import { WorkflowsClient } from "./rpc-client";
 import { resolveAppRootDir } from "../tako/app-root";
@@ -66,10 +67,8 @@ export async function bootstrapWorker(
 
   const concurrency = parseIntEnv("TAKO_WORKER_CONCURRENCY", 500);
   const idleTimeoutMs = parseIntEnv("TAKO_WORKER_IDLE_TIMEOUT_MS", 0);
-  const workflowWorker = process.env[WORKFLOW_WORKER_ENV]?.trim() || undefined;
-  const workerId = workflowWorker
-    ? `worker-${workflowWorker}-${process.pid}`
-    : `worker-${process.pid}`;
+  const workflowWorker = process.env[WORKFLOW_WORKER_ENV]?.trim() || DEFAULT_WORKER_GROUP;
+  const workerId = `worker-${workflowWorker}-${process.pid}`;
 
   workflowsEngine.configure({ client, workerId });
   setWorkflowRuntime({
@@ -78,10 +77,7 @@ export async function bootstrapWorker(
   });
 
   const workflowsDir = join(resolveAppRootDir(appDir, opts.appRoot), WORKFLOWS_DIRNAME);
-  const count = await workflowsEngine.discover(
-    workflowsDir,
-    workflowWorker === undefined ? {} : { worker: workflowWorker },
-  );
+  const count = await workflowsEngine.discover(workflowsDir, { worker: workflowWorker });
   if (count === 0) {
     return { started: false, reason: "no workflows discovered", workflowCount: 0 };
   }

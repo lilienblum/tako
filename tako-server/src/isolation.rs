@@ -20,6 +20,23 @@ pub(crate) struct AppUnixIdentity {
     pub(crate) ids: UserIds,
 }
 
+pub(crate) fn authorize_internal_socket_app(app: &str, peer_uid: u32) -> Result<(), String> {
+    if !crate::unix::is_root() {
+        return Ok(());
+    }
+    let user_name = app_unix_user_name(app);
+    let Some((uid, _)) = crate::unix::lookup_user_ids(&user_name)
+        .map_err(|error| format!("Failed to resolve {user_name}: {error}"))?
+    else {
+        return Err(format!("unknown app identity for {app}"));
+    };
+    if uid == peer_uid {
+        Ok(())
+    } else {
+        Err(format!("internal socket app mismatch for {app}"))
+    }
+}
+
 pub(crate) fn app_unix_user_name(app_id: &str) -> String {
     let digest = Sha256::digest(app_id.as_bytes());
     let hex = hex::encode(digest);
@@ -315,6 +332,15 @@ mod tests {
 
     fn mode(path: &Path) -> u32 {
         std::fs::metadata(path).unwrap().permissions().mode() & 0o7777
+    }
+
+    #[test]
+    fn authorize_internal_socket_allows_any_uid_when_not_root() {
+        if crate::unix::is_root() {
+            return;
+        }
+        assert!(authorize_internal_socket_app("notes/production", 1).is_ok());
+        assert!(authorize_internal_socket_app("other/staging", 2).is_ok());
     }
 
     #[test]

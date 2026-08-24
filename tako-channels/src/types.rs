@@ -167,20 +167,6 @@ pub struct ChannelAuthResponse {
     pub max_connection_lifetime_ms: u64,
 }
 
-impl ChannelAuthResponse {
-    pub(crate) fn denied_with_defaults() -> Self {
-        Self {
-            ok: false,
-            subject: None,
-            transport: None,
-            replay_window_ms: DEFAULT_REPLAY_WINDOW_MS,
-            inactivity_ttl_ms: DEFAULT_INACTIVITY_TTL_MS,
-            keepalive_interval_ms: DEFAULT_KEEPALIVE_INTERVAL_MS,
-            max_connection_lifetime_ms: DEFAULT_MAX_CONNECTION_LIFETIME_MS,
-        }
-    }
-}
-
 fn default_replay_window_ms() -> u64 {
     DEFAULT_REPLAY_WINDOW_MS
 }

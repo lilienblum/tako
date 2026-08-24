@@ -68,6 +68,8 @@ impl crate::ServerState {
     }
 
     async fn backup_app_now(&self, app: &str) -> Result<BackupInfo, String> {
+        let lock = self.get_deploy_lock(app).await;
+        let _guard = lock.lock().await;
         let backup = self
             .state_store
             .get_backup(app)
@@ -244,6 +246,8 @@ impl crate::ServerState {
     }
 
     async fn restore_backup_inner(&self, app: &str, backup_id: &str) -> Result<BackupInfo, String> {
+        let lock = self.get_deploy_lock(app).await;
+        let _guard = lock.lock().await;
         let backup = self
             .state_store
             .get_backup(app)

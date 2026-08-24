@@ -406,6 +406,45 @@ fn reclaim_expired_leaves_runs_with_valid_lease_alone() {
 }
 
 #[test]
+fn wait_for_event_timeout_materializes_null_step() {
+    let db = RunsDb::open_in_memory().unwrap();
+    db.enqueue("w", &serde_json::json!({}), &opts()).unwrap();
+    let run = db.claim("w1", &["w".into()], 30_000).unwrap().unwrap();
+    let past = now_ms() - 1;
+    db.wait_for_event(&run.id, "w1", "approval", "approval", Some(past))
+        .unwrap();
+
+    let claimed = db.claim("w1", &["w".into()], 30_000).unwrap().unwrap();
+    assert_eq!(claimed.step_state["approval"], serde_json::Value::Null);
+    assert_eq!(
+        db.signal("approval", &serde_json::json!({"ok": true}))
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn wait_for_event_signal_writes_payload_before_timeout() {
+    let db = RunsDb::open_in_memory().unwrap();
+    db.enqueue("w", &serde_json::json!({}), &opts()).unwrap();
+    let run = db.claim("w1", &["w".into()], 30_000).unwrap().unwrap();
+    let future = now_ms() + 60_000;
+    db.wait_for_event(&run.id, "w1", "approval", "approval", Some(future))
+        .unwrap();
+    assert_eq!(
+        db.signal("approval", &serde_json::json!({"ok": true}))
+            .unwrap(),
+        1
+    );
+
+    let claimed = db.claim("w1", &["w".into()], 30_000).unwrap().unwrap();
+    assert_eq!(
+        claimed.step_state["approval"],
+        serde_json::json!({"ok": true})
+    );
+}
+
+#[test]
 fn reclaim_expired_ignores_terminal_runs() {
     // A succeeded / dead / cancelled row has lease_until=NULL, but we
     // still want to be explicit: only status='running' is reclaimed.

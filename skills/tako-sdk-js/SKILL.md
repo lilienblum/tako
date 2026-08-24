@@ -170,7 +170,7 @@ export default defineConfig({
 
 **On `vite build`:** Emits `<outDir>/tako-entry.mjs` — a wrapper that normalizes the compiled server module into a default-exported fetch handler. Point `main` in `tako.toml` at this file.
 
-**On `vite dev`:** Adds `.test` to allowed hosts. If `PORT` env var is set, binds Vite to `127.0.0.1:$PORT` with `strictPort: true` (used by `tako dev`).
+**On `vite dev`:** Adds `.test` / `.tako.test` to allowed hosts and binds to `127.0.0.1`. The bound port is reported to `tako dev` over fd 4.
 
 ## Next.js Adapter
 
@@ -214,7 +214,7 @@ After this, server-side routes and server actions can call `defineWorkflow(...).
 ## Types
 
 ```typescript
-import type { FetchHandler, TakoOptions, TakoStatus } from "tako.sh";
+import type { FetchHandler, TakoStatus } from "tako.sh";
 
 // FetchHandler = (request: Request, env: Record<string, string>) => Response | Promise<Response>
 
@@ -323,9 +323,6 @@ const socket = room.connect({ authorization: token });
   // ...
 });
 socket.send({ type: "typing", data: { userId: "me" } });
-
-// Publishing from the browser (WS channels only)
-await room.publish({ type: "msg", data: { text: "hi", userId: "me" } });
 ```
 
 `authorization` is optional. Omit it for public or cookie-auth channels; use `headers.Authorization` when the app expects a custom authorization value.

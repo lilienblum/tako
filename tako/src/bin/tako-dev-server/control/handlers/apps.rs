@@ -258,6 +258,7 @@ async fn ensure_workflow_runtime(
         concurrency: 500,
         idle_timeout_ms: 3_000,
         command: cmd_os,
+        lanes: discover_dev_workflow_lanes(&cwd, app_root.as_deref()),
         cwd,
         secrets,
         storages,
@@ -563,6 +564,17 @@ fn spawn_registered_app_process(state: Arc<Mutex<State>>, config_path: String) {
             }
         }
     });
+}
+
+fn discover_dev_workflow_lanes(
+    project_dir: &Path,
+    app_root: Option<&str>,
+) -> Vec<tako_workflows::WorkerLane> {
+    let workflows_dir = match app_root.filter(|root| !root.is_empty() && *root != ".") {
+        Some(root) => project_dir.join(root).join("workflows"),
+        None => project_dir.join("workflows"),
+    };
+    tako_workflows::workflow_lanes_from_dir(&workflows_dir, 0, 500)
 }
 
 fn spawn_restarted_app_process(state: Arc<Mutex<State>>, config_path: String) {

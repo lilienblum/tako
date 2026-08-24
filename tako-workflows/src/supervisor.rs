@@ -34,6 +34,15 @@ const UNHEALTHY_COOLDOWN: Duration = Duration::from_secs(5);
 /// [`WorkerSpec::log_sink`] is set. `is_stderr` is `true` for stderr.
 pub type WorkerLogSink = Arc<dyn Fn(&str, bool) + Send + Sync>;
 
+/// One named worker group. Empty `WorkerSpec.lanes` means a single
+/// `"default"` lane that uses `workers` / `concurrency`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkerLane {
+    pub name: String,
+    pub workers: u32,
+    pub concurrency: u32,
+}
+
 /// Static configuration for a single app's workers.
 #[derive(Clone)]
 pub struct WorkerSpec {
@@ -66,21 +75,36 @@ pub struct WorkerSpec {
     pub log_sink: Option<WorkerLogSink>,
     /// Optional production process isolation for server-managed workers.
     pub isolation: Option<tako_spawn::ProcessIsolation>,
+    /// Named worker groups. Empty uses a single default lane.
+    pub lanes: Vec<WorkerLane>,
 }
 
 impl WorkerSpec {
     /// Env vars this supervisor always sets for workers, independent of
     /// the caller-supplied `env`. Caller's `env` is layered on top.
-    fn effective_env(&self) -> HashMap<String, String> {
+    fn resolved_lanes(&self) -> Vec<WorkerLane> {
+        if self.lanes.is_empty() {
+            vec![WorkerLane {
+                name: "default".into(),
+                workers: self.workers,
+                concurrency: self.concurrency,
+            }]
+        } else {
+            self.lanes.clone()
+        }
+    }
+
+    fn effective_env(&self, lane: &WorkerLane) -> HashMap<String, String> {
         let mut env: HashMap<String, String> = self.env.clone();
         env.insert(
             "TAKO_WORKER_CONCURRENCY".into(),
-            self.concurrency.to_string(),
+            lane.concurrency.to_string(),
         );
         env.insert(
             "TAKO_WORKER_IDLE_TIMEOUT_MS".into(),
             self.idle_timeout_ms.to_string(),
         );
+        env.insert("TAKO_WORKFLOW_WORKER".into(), lane.name.clone());
         env
     }
 }
@@ -102,6 +126,7 @@ pub struct WorkerSupervisor {
 
 struct ChildEntry {
     child: Child,
+    lane: String,
     spawned_at: Instant,
     /// Value of `health.runs_claimed_total` at spawn time. If the child
     /// exits and this counter hasn't advanced, the worker never managed
@@ -142,12 +167,11 @@ impl WorkerSupervisor {
     /// Launch all always-on workers. No-op when `workers == 0`
     /// (scale-to-zero: `wake()` spawns on demand).
     pub async fn start(&self) -> Result<(), SupervisorError> {
-        if self.spec.workers == 0 {
-            return Ok(());
-        }
         let mut state = self.state.lock();
-        for _ in 0..self.spec.workers {
-            self.spawn_one_locked(&mut state)?;
+        for lane in self.spec.resolved_lanes() {
+            for _ in 0..lane.workers {
+                self.spawn_one_locked(&mut state, &lane)?;
+            }
         }
         Ok(())
     }
@@ -170,21 +194,25 @@ impl WorkerSupervisor {
         if let Some(reason) = Self::unhealthy_reason(&state) {
             return Err(SupervisorError::Unhealthy(reason));
         }
-        let target = if self.spec.workers == 0 {
-            if state.children.is_empty() { 1 } else { 0 }
-        } else {
-            (self.spec.workers as usize).saturating_sub(state.children.len())
-        };
-        for _ in 0..target {
-            if let Err(e) = self.spawn_one_locked(&mut state) {
-                // Spawn itself failed (program-not-found, fork error, etc.).
-                // Mark unhealthy so the next enqueue surfaces a clear error
-                // instead of retrying the same broken command endlessly.
-                let msg = format!("worker spawn failed: {e}");
-                state.health.unhealthy_until = Some(Instant::now() + UNHEALTHY_COOLDOWN);
-                state.health.last_error = Some(msg.clone());
-                Self::emit_health_error(self.spec.log_sink.as_ref(), &msg);
-                return Err(e);
+        for lane in self.spec.resolved_lanes() {
+            let live = state
+                .children
+                .iter()
+                .filter(|child| child.lane == lane.name)
+                .count();
+            let target = if lane.workers == 0 {
+                usize::from(live == 0)
+            } else {
+                (lane.workers as usize).saturating_sub(live)
+            };
+            for _ in 0..target {
+                if let Err(e) = self.spawn_one_locked(&mut state, &lane) {
+                    let msg = format!("worker spawn failed: {e}");
+                    state.health.unhealthy_until = Some(Instant::now() + UNHEALTHY_COOLDOWN);
+                    state.health.last_error = Some(msg.clone());
+                    Self::emit_health_error(self.spec.log_sink.as_ref(), &msg);
+                    return Err(e);
+                }
             }
         }
         Ok(())
@@ -386,7 +414,11 @@ impl WorkerSupervisor {
 
     /// Caller must hold `self.state` so the spawn + push is atomic with
     /// the slot-availability check.
-    fn spawn_one_locked(&self, state: &mut State) -> Result<(), SupervisorError> {
+    fn spawn_one_locked(
+        &self,
+        state: &mut State,
+        lane: &WorkerLane,
+    ) -> Result<(), SupervisorError> {
         let mut iter = self.spec.command.iter();
         let program = iter.next().ok_or(SupervisorError::EmptyCommand)?;
         let args: Vec<&OsString> = iter.collect();
@@ -413,7 +445,7 @@ impl WorkerSupervisor {
                 cmd.env(key, v);
             }
         }
-        for (k, v) in self.spec.effective_env() {
+        for (k, v) in self.spec.effective_env(lane) {
             cmd.env(k, v);
         }
 
@@ -517,6 +549,7 @@ impl WorkerSupervisor {
 
         state.children.push(ChildEntry {
             child,
+            lane: lane.name.clone(),
             spawned_at: Instant::now(),
             claimed_snapshot: state.health.runs_claimed_total,
         });
@@ -561,6 +594,131 @@ fn create_bootstrap_pipe(
 )> {
     let bytes = tako_core::bootstrap::envelope_bytes(token, secrets, storages);
     tako_spawn::create_payload_pipe(bytes)
+}
+
+/// Scale-to-zero lanes for every worker group declared under `workflows_dir`,
+/// plus the default group. Used by tako-server and `tako dev`.
+pub fn workflow_lanes_from_dir(
+    workflows_dir: &std::path::Path,
+    workers: u32,
+    concurrency: u32,
+) -> Vec<WorkerLane> {
+    let mut names = std::collections::BTreeSet::from(["default".to_string()]);
+    collect_worker_group_names(workflows_dir, &mut names);
+    names
+        .into_iter()
+        .map(|name| WorkerLane {
+            name,
+            workers,
+            concurrency,
+        })
+        .collect()
+}
+
+fn collect_worker_group_names(
+    workflows_dir: &std::path::Path,
+    names: &mut std::collections::BTreeSet<String>,
+) {
+    let Ok(entries) = std::fs::read_dir(workflows_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !is_workflow_source(&path) {
+            continue;
+        }
+        let Ok(source) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        collect_worker_names_from_source(&source, names);
+    }
+}
+
+fn is_workflow_source(path: &std::path::Path) -> bool {
+    matches!(
+        path.extension().and_then(|ext| ext.to_str()),
+        Some("ts" | "tsx" | "js" | "mjs" | "mts")
+    )
+}
+
+fn collect_worker_names_from_source(source: &str, names: &mut std::collections::BTreeSet<String>) {
+    let bytes = source.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\'' | b'"' | b'`' => i = skip_js_string(bytes, i),
+            b'/' if bytes.get(i + 1) == Some(&b'/') => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b'/' if bytes.get(i + 1) == Some(&b'*') => {
+                i += 2;
+                while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                    i += 1;
+                }
+                i = i.saturating_add(2);
+            }
+            b'w' if bytes[i..].starts_with(b"worker") => {
+                let after = i + "worker".len();
+                if let Some(name) = worker_name_after_key(bytes, after) {
+                    names.insert(name);
+                }
+                i = after;
+            }
+            _ => i += 1,
+        }
+    }
+}
+
+fn worker_name_after_key(bytes: &[u8], mut i: usize) -> Option<String> {
+    while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    if bytes.get(i) != Some(&b':') {
+        return None;
+    }
+    i += 1;
+    while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    let quote = *bytes.get(i)?;
+    if quote != b'\'' && quote != b'"' {
+        return None;
+    }
+    i += 1;
+    let start = i;
+    while i < bytes.len() && bytes[i] != quote {
+        i += 1;
+    }
+    if i >= bytes.len() {
+        return None;
+    }
+    let name = std::str::from_utf8(&bytes[start..i]).ok()?.trim();
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return None;
+    }
+    Some(name.to_string())
+}
+
+fn skip_js_string(bytes: &[u8], start: usize) -> usize {
+    let quote = bytes[start];
+    let mut i = start + 1;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' {
+            i = i.saturating_add(2);
+            continue;
+        }
+        if bytes[i] == quote {
+            return i + 1;
+        }
+        i += 1;
+    }
+    bytes.len()
 }
 
 #[cfg(test)]

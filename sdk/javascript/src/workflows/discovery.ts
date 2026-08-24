@@ -33,7 +33,7 @@ export interface WorkflowDiscoveryOptions {
   worker?: string;
 }
 
-const DEFAULT_WORKER_GROUP = "default";
+export const DEFAULT_WORKER_GROUP = "default";
 
 export async function discoverWorkflows(
   dir: string,

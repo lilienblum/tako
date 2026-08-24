@@ -174,7 +174,7 @@ Workflow and step lifecycle logs appear in the normal Tako log stream. Use `ctx.
 
 Tako keeps no workflow worker running while the queue has no runnable work. Enqueue, cron, a signal, a due retry or sleep, and reclaimed work can wake a worker. The worker exits after its idle window and the next runnable run starts a fresh process.
 
-Production currently supervises one workflow lane per app. The config parser accepts worker counts, concurrency, named groups, and per-server overrides, but production supervision does not use those settings yet. Do not depend on them for tuning or isolation until that wiring ships.
+Production starts one scale-to-zero lane per worker group. Workflows with `worker: "email"` run in a process that only claims that group. The config parser also accepts worker counts, concurrency, and per-server overrides; those values are not applied yet.
 
 The workflow process runs separately from HTTP instances. Heavy workflow dependencies do not have to occupy every request-serving process, while the worker still receives the app's runtime variables, secrets, storage bindings, and structured logs.
 

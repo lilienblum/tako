@@ -140,6 +140,29 @@ impl PostgresRunsDb {
             row.get::<_, i64>(5) as u32,
             row.get::<_, i64>(6),
         );
+        tx.execute(
+            &format!(
+                "INSERT INTO {schema}.steps (app_id, run_id, name, result, completed_at)
+                 SELECT $1, run_id, step_name, 'null', $3
+                 FROM {schema}.event_waiters
+                 WHERE app_id=$1 AND run_id=$2
+                   AND expires_at IS NOT NULL
+                   AND expires_at <= $3
+                 ON CONFLICT DO NOTHING",
+                schema = self.schema
+            ),
+            &[&self.app_id, &claimed.0, &now],
+        )?;
+        tx.execute(
+            &format!(
+                "DELETE FROM {}.event_waiters
+                 WHERE app_id=$1 AND run_id=$2
+                   AND expires_at IS NOT NULL
+                   AND expires_at <= $3",
+                self.schema
+            ),
+            &[&self.app_id, &claimed.0, &now],
+        )?;
         let steps = tx.query(
             &format!(
                 "SELECT name, result FROM {}.steps WHERE app_id=$1 AND run_id=$2",
@@ -633,7 +656,10 @@ fn init_schema(client: &mut Client, schema: &str) -> Result<(), RunsDbError> {
              PRIMARY KEY(app_id, run_id, step_name)
          );
          CREATE INDEX IF NOT EXISTS idx_event_waiters_app_event
-           ON {schema}.event_waiters(app_id, event_name);"
+           ON {schema}.event_waiters(app_id, event_name);
+         CREATE INDEX IF NOT EXISTS idx_event_waiters_app_expiry
+           ON {schema}.event_waiters(app_id, expires_at)
+           WHERE expires_at IS NOT NULL;"
     ))?;
     Ok(())
 }

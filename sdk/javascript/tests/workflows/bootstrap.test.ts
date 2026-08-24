@@ -87,4 +87,24 @@ export default defineWorkflow("manual", { handler: async () => {} });
       },
     ]);
   });
+
+  test("default worker group does not load workflows assigned to another group", async () => {
+    const workflowsDir = join(dir, "workflows");
+    await mkdir(workflowsDir);
+    const defineUrl = new URL("../../src/workflows/define.ts", import.meta.url).href;
+    await writeFile(
+      join(workflowsDir, "email.mjs"),
+      `
+import { defineWorkflow } from "${defineUrl}";
+export default defineWorkflow("email", { worker: "email", handler: async () => {} });
+`,
+    );
+    delete process.env["TAKO_WORKFLOW_WORKER"];
+    const commands: unknown[] = [];
+    server = await startRpcCaptureServer(sock, commands);
+
+    const result = await bootstrapWorker({ appDir: dir, appRoot: "." });
+    expect(result.started).toBe(false);
+    expect(result.workflowCount).toBe(0);
+  });
 });

@@ -155,6 +155,9 @@ impl crate::ServerState {
     pub(crate) async fn delete_app(&self, app_name: &str) -> Response {
         tracing::info!(app = app_name, "Deleting app");
 
+        let lock = self.get_deploy_lock(app_name).await;
+        let _guard = lock.lock().await;
+
         // Drain workflow resources (worker, cron, enqueue socket) + remove
         // workflow state BEFORE we nuke app_root — the manager owns those files.
         self.workflows
@@ -176,11 +179,6 @@ impl crate::ServerState {
         {
             let mut route_table = self.routes.write();
             route_table.remove_app_routes(app_name);
-        }
-
-        {
-            let mut locks = self.deploy_locks.write().await;
-            locks.remove(app_name);
         }
 
         let (name, environment) = requested_deployment_identity(app_name);
@@ -206,6 +204,11 @@ impl crate::ServerState {
                 app_root.display(),
                 e
             ));
+        }
+
+        {
+            let mut locks = self.deploy_locks.write().await;
+            locks.remove(app_name);
         }
 
         Response::ok(serde_json::json!({

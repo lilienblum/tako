@@ -121,6 +121,19 @@ func TestDifferentAppTakoHostPassthrough(t *testing.T) {
 	}
 }
 
+func TestChannelAuthorizeRejectsOversizedBody(t *testing.T) {
+	handler := NewEndpointHandler("demo", "test1234", "v1.0", "secret-token", http.NotFoundHandler())
+	body := `{"channel":"` + strings.Repeat("a", maxInternalBodyBytes+1) + `","operation":"subscribe"}`
+	req := httptest.NewRequest(http.MethodPost, internalChannelAuthorizePath, strings.NewReader(body))
+	req.Host = "demo.tako"
+	req.Header.Set(internalTokenHeader, "secret-token")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("oversized body: status = %d, want 400", w.Code)
+	}
+}
+
 func TestChannelAuthorizeEndpoint(t *testing.T) {
 	called := false
 	handler := NewEndpointHandler("demo", "test1234", "v1.0", "secret-token", http.NotFoundHandler())

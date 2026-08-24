@@ -36,28 +36,14 @@ where
         let consumed = available.len();
         reader.consume(consumed);
         if buf.len() > max_bytes {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!(
-                    "json line exceeds max length ({} > {})",
-                    buf.len(),
-                    max_bytes
-                ),
-            ));
+            return Err(oversize_line_error(buf.len(), max_bytes));
         }
     }
     if buf.is_empty() {
         return Ok(None);
     }
     if buf.len() > max_bytes {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!(
-                "json line exceeds max length ({} > {})",
-                buf.len(),
-                max_bytes
-            ),
-        ));
+        return Err(oversize_line_error(buf.len(), max_bytes));
     }
 
     let s = std::str::from_utf8(&buf)
@@ -66,6 +52,13 @@ where
     serde_json::from_str::<T>(s)
         .map(Some)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
+fn oversize_line_error(len: usize, max_bytes: usize) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        format!("json line exceeds max length ({len} > {max_bytes})"),
+    )
 }
 
 pub async fn read_json_line<R, T>(reader: &mut R) -> std::io::Result<Option<T>>
@@ -110,6 +103,11 @@ where
                 let resp = invalid_response(e);
                 let _ = write_json_line(&mut writer, &resp).await;
                 continue;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::InvalidInput => {
+                let resp = invalid_response(e);
+                let _ = write_json_line(&mut writer, &resp).await;
+                break;
             }
             Err(e) => return Err(e),
         }) else {
@@ -236,7 +234,22 @@ mod tests {
         let err = read_json_line_with_limit::<_, serde_json::Value>(&mut br, 32)
             .await
             .unwrap_err();
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[tokio::test]
+    async fn oversize_without_newline_is_invalid_input() {
+        let (a, b) = tokio::io::duplex(1024);
+        let (mut _ar, mut aw) = tokio::io::split(a);
+        let (mut br, _bw) = tokio::io::split(b);
+        let mut br = BufReader::new(&mut br);
+
+        aw.write_all(&[b'x'; 40]).await.unwrap();
+
+        let err = read_json_line_with_limit::<_, serde_json::Value>(&mut br, 32)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     }
 
     #[tokio::test]

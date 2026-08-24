@@ -1,12 +1,15 @@
 package internal
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 	"os"
 	"strings"
 	"time"
 )
+
+const maxInternalBodyBytes = 1 << 20
 
 const internalTokenHeader = "x-tako-internal-token"
 const internalHostSuffix = ".tako"
@@ -57,7 +60,8 @@ func (h *EndpointHandler) handleInternal(w http.ResponseWriter, r *http.Request)
 	// Verify internal token when set (production mode).
 	// In dev mode (no token), all Host:<app>.tako requests are allowed.
 	if h.internalToken != "" {
-		if r.Header.Get(internalTokenHeader) != h.internalToken {
+		provided := r.Header.Get(internalTokenHeader)
+		if subtle.ConstantTimeCompare([]byte(provided), []byte(h.internalToken)) != 1 {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -92,7 +96,7 @@ func (h *EndpointHandler) handleStatus(w http.ResponseWriter) {
 
 func (h *EndpointHandler) handleChannelAuthorize(w http.ResponseWriter, r *http.Request) {
 	var input ChannelAuthorizeInput
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxInternalBodyBytes)).Decode(&input); err != nil {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}

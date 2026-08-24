@@ -35,7 +35,7 @@ async fn internal_socket_is_group_accessible_for_app_processes() {
 
     let tmp = tempfile::tempdir().unwrap();
     let sock = tmp.path().join("internal.sock");
-    let handle = spawn(&sock, lookup_for(Default::default()), None).unwrap();
+    let handle = spawn(&sock, lookup_for(Default::default()), None, None).unwrap();
     let mode = std::fs::metadata(&sock).unwrap().permissions().mode() & 0o777;
 
     handle.shutdown().await;
@@ -70,7 +70,7 @@ async fn enqueue_routes_by_app() {
     let mut map = std::collections::HashMap::new();
     map.insert("a".to_string(), db_a.clone());
     map.insert("b".to_string(), db_b.clone());
-    let handle = spawn(&sock, lookup_for(map), None).unwrap();
+    let handle = spawn(&sock, lookup_for(map), None, None).unwrap();
 
     let stream = UnixStream::connect(&sock).await.unwrap();
     let (r, mut w) = stream.into_split();
@@ -110,7 +110,7 @@ async fn enqueue_rejects_when_health_check_fails() {
             on_claimed: Arc::new(|| {}),
         })
     });
-    let handle = spawn(&sock, lookup, None).unwrap();
+    let handle = spawn(&sock, lookup, None, None).unwrap();
 
     let stream = UnixStream::connect(&sock).await.unwrap();
     let (r, mut w) = stream.into_split();
@@ -154,7 +154,7 @@ async fn draining_runtime_rejects_enqueue_and_claims_nothing() {
             on_claimed: Arc::new(|| {}),
         })
     });
-    let handle = spawn(&sock, lookup, None).unwrap();
+    let handle = spawn(&sock, lookup, None, None).unwrap();
 
     let stream = UnixStream::connect(&sock).await.unwrap();
     let (r, mut w) = stream.into_split();
@@ -208,7 +208,7 @@ async fn claim_run_fires_on_claimed() {
             on_claimed: on_claimed.clone(),
         })
     });
-    let handle = spawn(&sock, lookup, None).unwrap();
+    let handle = spawn(&sock, lookup, None, None).unwrap();
 
     let stream = UnixStream::connect(&sock).await.unwrap();
     let (r, mut w) = stream.into_split();
@@ -254,7 +254,7 @@ async fn claim_respects_in_flight_limiter() {
             on_claimed: Arc::new(|| {}),
         })
     });
-    let handle = spawn(&sock, lookup, None).unwrap();
+    let handle = spawn(&sock, lookup, None, None).unwrap();
 
     let stream = UnixStream::connect(&sock).await.unwrap();
     let (r, mut w) = stream.into_split();
@@ -324,7 +324,7 @@ async fn claim_without_work_does_not_hold_a_slot() {
             on_claimed: Arc::new(|| {}),
         })
     });
-    let handle = spawn(&sock, lookup, None).unwrap();
+    let handle = spawn(&sock, lookup, None, None).unwrap();
 
     let stream = UnixStream::connect(&sock).await.unwrap();
     let (r, mut w) = stream.into_split();
@@ -371,7 +371,7 @@ async fn complete_releases_a_slot() {
             on_claimed: Arc::new(|| {}),
         })
     });
-    let handle = spawn(&sock, lookup, None).unwrap();
+    let handle = spawn(&sock, lookup, None, None).unwrap();
 
     let stream = UnixStream::connect(&sock).await.unwrap();
     let (r, mut w) = stream.into_split();
@@ -408,7 +408,7 @@ async fn complete_releases_a_slot() {
 async fn unknown_app_returns_error() {
     let tmp = tempfile::tempdir().unwrap();
     let sock = tmp.path().join("internal.sock");
-    let handle = spawn(&sock, lookup_for(Default::default()), None).unwrap();
+    let handle = spawn(&sock, lookup_for(Default::default()), None, None).unwrap();
 
     let stream = UnixStream::connect(&sock).await.unwrap();
     let (r, mut w) = stream.into_split();
@@ -449,7 +449,7 @@ async fn on_enqueue_fires_for_signal_with_waiters_only() {
             on_claimed: Arc::new(|| {}),
         })
     });
-    let handle = spawn(&sock, lookup, None).unwrap();
+    let handle = spawn(&sock, lookup, None, None).unwrap();
 
     // Signal with no waiters → should NOT fire on_enqueue.
     let stream = UnixStream::connect(&sock).await.unwrap();
@@ -484,11 +484,39 @@ async fn on_enqueue_fires_for_signal_with_waiters_only() {
     handle.shutdown().await;
 }
 
+#[test]
+fn authorize_peer_skips_when_unset() {
+    assert!(authorize_peer(None, None, "app").is_ok());
+}
+
+#[test]
+fn authorize_peer_rejects_missing_uid_when_configured() {
+    let auth: PeerAuthFn = Arc::new(|_app, _uid| Ok(()));
+    let err = authorize_peer(Some(&auth), None, "app").unwrap_err();
+    assert!(err.contains("missing peer credentials"));
+}
+
+#[test]
+fn authorize_peer_rejects_mismatched_app() {
+    let auth: PeerAuthFn = Arc::new(|app, uid| {
+        if app == "owned" && uid == 42 {
+            Ok(())
+        } else {
+            Err("app mismatch".into())
+        }
+    });
+    assert!(authorize_peer(Some(&auth), Some(42), "owned").is_ok());
+    assert_eq!(
+        authorize_peer(Some(&auth), Some(42), "other").unwrap_err(),
+        "app mismatch"
+    );
+}
+
 #[tokio::test]
 async fn shutdown_removes_pid_socket_file() {
     let tmp = tempfile::tempdir().unwrap();
     let sock = tmp.path().join("internal.sock");
-    let handle = spawn(&sock, lookup_for(Default::default()), None).unwrap();
+    let handle = spawn(&sock, lookup_for(Default::default()), None, None).unwrap();
     assert!(sock.exists() || sock.is_symlink());
     handle.shutdown().await;
 }

@@ -132,7 +132,8 @@ export async function handleTakoEndpoint(
 
   const token = internalToken();
   const path = url.pathname;
-  if (!token || request.headers.get(TAKO_INTERNAL_TOKEN_HEADER) !== token) {
+  const provided = request.headers.get(TAKO_INTERNAL_TOKEN_HEADER) ?? "";
+  if (!token || !constantTimeEqual(provided, token)) {
     return new Response(JSON.stringify({ error: "Forbidden" }), {
       status: 403,
       headers: { "Content-Type": "application/json" },

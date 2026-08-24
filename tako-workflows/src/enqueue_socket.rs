@@ -66,6 +66,11 @@ pub type AppLookup = Arc<dyn Fn(&str) -> Option<AppHandlers> + Send + Sync>;
 pub type ChannelPublishFn =
     Arc<dyn Fn(&str, &str, serde_json::Value) -> Result<serde_json::Value, String> + Send + Sync>;
 
+/// When set, every command's `app` must be authorized for the connecting
+/// process uid (from `SO_PEERCRED`). Used in production so one app cannot
+/// enqueue, claim, or publish as another.
+pub type PeerAuthFn = Arc<dyn Fn(&str, u32) -> Result<(), String> + Send + Sync>;
+
 /// Handle to the running socket. Drop to stop accepting + remove files.
 pub struct EnqueueSocketHandle {
     #[allow(dead_code)]
@@ -108,6 +113,7 @@ pub fn spawn(
     symlink_path: impl AsRef<Path>,
     lookup: AppLookup,
     channel_publish: Option<ChannelPublishFn>,
+    peer_auth: Option<PeerAuthFn>,
 ) -> std::io::Result<EnqueueSocketHandle> {
     let symlink_path = symlink_path.as_ref().to_path_buf();
     let dir = symlink_path
@@ -149,7 +155,13 @@ pub fn spawn(
 
     let listener = UnixListener::from_std(std_listener)?;
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-    let join = tokio::spawn(run(listener, lookup, channel_publish, shutdown_rx));
+    let join = tokio::spawn(run(
+        listener,
+        lookup,
+        channel_publish,
+        peer_auth,
+        shutdown_rx,
+    ));
 
     Ok(EnqueueSocketHandle {
         symlink_path,
@@ -245,6 +257,7 @@ async fn run(
     listener: UnixListener,
     lookup: AppLookup,
     channel_publish: Option<ChannelPublishFn>,
+    peer_auth: Option<PeerAuthFn>,
     shutdown_rx: oneshot::Receiver<()>,
 ) {
     tokio::pin!(shutdown_rx);
@@ -256,13 +269,24 @@ async fn run(
                     Ok((stream, _addr)) => {
                         let lookup = lookup.clone();
                         let channel_publish = channel_publish.clone();
+                        let peer_auth = peer_auth.clone();
+                        let peer_uid = stream.peer_cred().ok().map(|cred| cred.uid());
                         tokio::spawn(async move {
                             let _ = serve_jsonl_connection(
                                 stream,
                                 move |cmd: Command| {
                                     let lookup = lookup.clone();
                                     let channel_publish = channel_publish.clone();
-                                    async move { handle_command(&lookup, channel_publish.as_ref(), cmd) }
+                                    let peer_auth = peer_auth.clone();
+                                    async move {
+                                        handle_command(
+                                            &lookup,
+                                            channel_publish.as_ref(),
+                                            peer_auth.as_ref(),
+                                            peer_uid,
+                                            cmd,
+                                        )
+                                    }
                                 },
                                 |e| Response::error(format!("invalid request: {e}")),
                             )
@@ -281,6 +305,20 @@ async fn run(
 /// Extract the app from any command the internal socket accepts. Returns
 /// None for commands that don't carry an app (none currently — every
 /// supported command carries it).
+fn authorize_peer(
+    peer_auth: Option<&PeerAuthFn>,
+    peer_uid: Option<u32>,
+    app: &str,
+) -> Result<(), String> {
+    let Some(auth) = peer_auth else {
+        return Ok(());
+    };
+    let Some(uid) = peer_uid else {
+        return Err("missing peer credentials".to_string());
+    };
+    auth(app, uid)
+}
+
 fn command_app(cmd: &Command) -> Option<&str> {
     match cmd {
         Command::EnqueueRun { app, .. }
@@ -302,6 +340,8 @@ fn command_app(cmd: &Command) -> Option<&str> {
 fn handle_command(
     lookup: &AppLookup,
     channel_publish: Option<&ChannelPublishFn>,
+    peer_auth: Option<&PeerAuthFn>,
+    peer_uid: Option<u32>,
     cmd: Command,
 ) -> Response {
     let app = match command_app(&cmd) {
@@ -313,6 +353,9 @@ fn handle_command(
             ));
         }
     };
+    if let Err(error) = authorize_peer(peer_auth, peer_uid, &app) {
+        return Response::error(error);
+    }
 
     // Channel publish takes a different route — the channel store lives
     // outside the workflow manager, so we hand the payload to the

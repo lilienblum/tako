@@ -1,6 +1,6 @@
 use parking_lot::Mutex;
 use rusqlite::types::Value;
-use rusqlite::{Connection, params_from_iter};
+use rusqlite::{Connection, params, params_from_iter};
 use std::collections::HashMap;
 use std::path::Path;
 use tako_core::{EnqueueOpts, EnqueueRunResponse, RunPayload, ScheduleSpec};
@@ -161,6 +161,23 @@ impl SqliteRunsDb {
         let Some(claimed) = claimed else {
             return Ok(None);
         };
+
+        conn.execute(
+            "INSERT OR IGNORE INTO steps (run_id, name, result, completed_at)
+             SELECT run_id, step_name, 'null', ?1
+             FROM event_waiters
+             WHERE run_id = ?2
+               AND expires_at IS NOT NULL
+               AND expires_at <= ?1",
+            params![now, claimed.0.as_str()],
+        )?;
+        conn.execute(
+            "DELETE FROM event_waiters
+             WHERE run_id = ?1
+               AND expires_at IS NOT NULL
+               AND expires_at <= ?2",
+            params![claimed.0.as_str(), now],
+        )?;
 
         let step_rows = {
             let mut step_stmt =

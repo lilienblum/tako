@@ -208,6 +208,14 @@ fn validate_deploy_routes_rejects_empty_route_entry() {
 }
 
 #[test]
+fn validate_deploy_routes_rejects_path_escaping_hosts() {
+    let err = validate_deploy_routes(&["..".to_string()]).unwrap_err();
+    assert!(err.contains("invalid route host"));
+    let err = validate_deploy_routes(&["../evil.example.com".to_string()]).unwrap_err();
+    assert!(err.contains("invalid route host"));
+}
+
+#[test]
 fn validate_app_name_accepts_app_env_identifier() {
     assert!(validate_app_name("my-app/staging").is_ok());
 }

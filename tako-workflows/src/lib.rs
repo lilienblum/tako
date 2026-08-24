@@ -27,7 +27,7 @@ pub use enqueue::{POSTGRES_WORKFLOWS_SCHEMA, RunsDb, WorkflowStoreConfig};
 #[allow(unused_imports)]
 pub use enqueue_socket::{
     AppHandlers, AppLookup, ChannelPublishFn, EnqueueSocketHandle, HealthCheck, OnClaimed,
-    OnEnqueue, spawn as spawn_enqueue_socket,
+    OnEnqueue, PeerAuthFn, spawn as spawn_enqueue_socket,
 };
 #[allow(unused_imports)]
 pub use in_flight::InFlightLimiter;
@@ -37,4 +37,6 @@ pub use manager::{
     worker_spec_for_command,
 };
 #[allow(unused_imports)]
-pub use supervisor::{WorkerLogSink, WorkerSpec, WorkerSupervisor};
+pub use supervisor::{
+    WorkerLane, WorkerLogSink, WorkerSpec, WorkerSupervisor, workflow_lanes_from_dir,
+};

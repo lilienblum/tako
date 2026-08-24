@@ -3,6 +3,7 @@ import {
   defineWorkflow,
   isWorkflowDefinition,
   isWorkflowExport,
+  setWorkflowRuntime,
   WORKFLOW_SYMBOL,
 } from "../../src/workflows/define";
 
@@ -21,6 +22,25 @@ describe("defineWorkflow", () => {
     expect(exp.definition.handler).toBe(fn);
     expect(exp.definition.opts).toEqual({ schedule: "0 9 * * *", local: true });
     expect(typeof exp.enqueue).toBe("function");
+  });
+
+  test("enqueue stamps workflow retries unless the caller overrides", async () => {
+    const calls: unknown[] = [];
+    setWorkflowRuntime({
+      enqueue: async (_name, _payload, options) => {
+        calls.push(options);
+        return "run-1";
+      },
+      signal: async () => 0,
+    });
+    try {
+      const exp = defineWorkflow("job", { retries: 4, handler: async () => {} });
+      await exp.enqueue({});
+      await exp.enqueue({}, { retries: 0 });
+      expect(calls).toEqual([{ retries: 4 }, { retries: 0 }]);
+    } finally {
+      setWorkflowRuntime(null);
+    }
   });
 
   test("opts only stores metadata outside the handler", () => {

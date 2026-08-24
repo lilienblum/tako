@@ -232,6 +232,11 @@ fn validate_version_string(version: &str) -> Result<(), String> {
             "version string contains invalid characters: '{version}'"
         ));
     }
+    if version == "." || version == ".." {
+        return Err(format!(
+            "version string is not a valid path segment: '{version}'"
+        ));
+    }
     Ok(())
 }
 

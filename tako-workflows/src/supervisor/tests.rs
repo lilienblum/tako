@@ -15,7 +15,32 @@ fn sleep_spec(cwd: PathBuf, workers: u32, sleep_secs: &str) -> WorkerSpec {
         storages: HashMap::new(),
         log_sink: None,
         isolation: None,
+        lanes: Vec::new(),
     }
+}
+
+#[test]
+fn workflow_lanes_from_dir_include_default_and_declared_groups() {
+    let dir = tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("send-email.ts"),
+        r#"export default defineWorkflow("send-email", { worker: "email", handler: async () => {} });"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("notes.ts"),
+        "export default defineWorkflow(\"notes\", { handler: async () => {} });",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("ignored.ts"),
+        "// worker: \"commented\"\nconst worker = \"not-a-key\";",
+    )
+    .unwrap();
+
+    let lanes = workflow_lanes_from_dir(dir.path(), 0, 10);
+    let names: Vec<&str> = lanes.iter().map(|lane| lane.name.as_str()).collect();
+    assert_eq!(names, ["default", "email"]);
 }
 
 #[tokio::test]
@@ -83,6 +108,7 @@ async fn shutdown_reaps_children_that_ignore_sigterm() {
         storages: HashMap::new(),
         log_sink: None,
         isolation: None,
+        lanes: Vec::new(),
     };
     let sup = WorkerSupervisor::new(spec);
     sup.start().await.unwrap();
@@ -121,6 +147,7 @@ fn failing_spec(cwd: PathBuf) -> WorkerSpec {
         storages: HashMap::new(),
         log_sink: None,
         isolation: None,
+        lanes: Vec::new(),
     }
 }
 
@@ -185,6 +212,7 @@ async fn clean_idle_exit_does_not_mark_unhealthy() {
         storages: HashMap::new(),
         log_sink: None,
         isolation: None,
+        lanes: Vec::new(),
     };
     let sup = WorkerSupervisor::new(spec);
     sup.wake().unwrap();
@@ -207,6 +235,7 @@ async fn background_reaper_collects_clean_idle_exit_without_poll() {
         storages: HashMap::new(),
         log_sink: None,
         isolation: None,
+        lanes: Vec::new(),
     };
     let sup = WorkerSupervisor::new(spec);
     sup.wake().unwrap();
@@ -235,6 +264,7 @@ async fn wake_accepts_clean_exit_when_worker_closes_bootstrap_pipe() {
         storages: HashMap::new(),
         log_sink: None,
         isolation: None,
+        lanes: Vec::new(),
     };
     let sup = WorkerSupervisor::new(spec);
 
@@ -332,8 +362,9 @@ async fn effective_env_sets_concurrency_and_idle_timeout() {
         storages: HashMap::new(),
         log_sink: None,
         isolation: None,
+        lanes: Vec::new(),
     };
-    let env = spec.effective_env();
+    let env = spec.effective_env(&spec.resolved_lanes()[0]);
     assert_eq!(
         env.get("TAKO_WORKER_CONCURRENCY").map(String::as_str),
         Some("7")
@@ -341,6 +372,10 @@ async fn effective_env_sets_concurrency_and_idle_timeout() {
     assert_eq!(
         env.get("TAKO_WORKER_IDLE_TIMEOUT_MS").map(String::as_str),
         Some("12000")
+    );
+    assert_eq!(
+        env.get("TAKO_WORKFLOW_WORKER").map(String::as_str),
+        Some("default")
     );
     assert_eq!(env.get("FOO").map(String::as_str), Some("bar"));
 }

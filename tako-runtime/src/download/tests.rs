@@ -71,6 +71,13 @@ fn extract_binary_name_gets_filename_from_path() {
 }
 
 #[test]
+fn validate_version_string_rejects_dot_segments() {
+    assert!(validate_version_string("1.2.3").is_ok());
+    assert!(validate_version_string("..").is_err());
+    assert!(validate_version_string(".").is_err());
+}
+
+#[test]
 fn resolve_bin_returns_none_when_not_installed() {
     let dir = TempDir::new().unwrap();
     let mgr = DownloadManager::new(dir.path().to_path_buf());

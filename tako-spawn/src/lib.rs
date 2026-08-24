@@ -66,7 +66,7 @@ impl Default for ProcessIsolation {
 }
 
 pub fn assign_pid_to_cgroup(cgroup: &CgroupAssignment, pid: u32) -> std::io::Result<()> {
-    std::fs::write(cgroup.path.join("cgroup.procs"), pid.to_string())
+    std::fs::write(cgroup.path.join("cgroup.procs"), format!("{pid}\n"))
 }
 
 /// Apply child-side process hardening from a `pre_exec` hook.
@@ -86,6 +86,10 @@ pub unsafe fn install_process_isolation(isolation: &ProcessIsolation) -> std::io
     }
     if isolation.no_new_privs {
         set_no_new_privs()?;
+    }
+    if let Some(cgroup) = &isolation.cgroup {
+        let pid = unsafe { libc::getpid() } as u32;
+        assign_pid_to_cgroup(cgroup, pid)?;
     }
     if let Some(user) = &isolation.user {
         drop_to_user(user)?;
@@ -388,6 +392,55 @@ mod tests {
 
         assert_eq!(buf.len(), big.len());
         assert_eq!(buf, big);
+    }
+
+    #[test]
+    fn process_isolation_joins_cgroup_before_exec() {
+        let dir = std::env::temp_dir().join(format!(
+            "tako-cgroup-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let procs = dir.join("cgroup.procs");
+        std::fs::write(&procs, "").unwrap();
+        let isolation = ProcessIsolation {
+            resource_limits: ResourceLimits {
+                open_files: None,
+                processes: None,
+                address_space_bytes: None,
+            },
+            cgroup: Some(CgroupAssignment { path: dir.clone() }),
+            umask: None,
+            no_new_privs: false,
+            clear_ambient_capabilities: false,
+            ..Default::default()
+        };
+
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "cat cgroup.procs; echo $$"])
+            .current_dir(&dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        unsafe {
+            cmd.pre_exec(move || install_process_isolation(&isolation));
+        }
+
+        let output = cmd.output().expect("spawn child");
+        assert!(
+            output.status.success(),
+            "child failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let lines: Vec<&str> = stdout.lines().collect();
+        assert_eq!(lines.len(), 2, "stdout={stdout}");
+        assert_eq!(lines[0].trim(), lines[1].trim());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

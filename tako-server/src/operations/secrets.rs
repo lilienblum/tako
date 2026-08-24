@@ -11,6 +11,17 @@ impl crate::ServerState {
     ) -> Response {
         tracing::info!(app = app_name, "Updating secrets");
 
+        let lock = self.get_deploy_lock(app_name).await;
+        let _guard = match lock.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                return Response::error(format!(
+                    "Deploy already in progress for app '{}'. Please wait and try again.",
+                    app_name
+                ));
+            }
+        };
+
         if let Err(e) = self.state_store.set_secrets(app_name, &new_secrets) {
             return Response::error(format!("Failed to store secrets: {}", e));
         }

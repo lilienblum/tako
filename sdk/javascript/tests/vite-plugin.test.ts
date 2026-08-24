@@ -83,7 +83,7 @@ describe("tako Vite entry plugin", () => {
     );
     expect(wrapper).toContain("export default async function");
     expect(wrapper).toContain("handleTakoEndpoint");
-    expect(wrapper).toContain("normalizeFetchResponse(await fetchHandler(request))");
+    expect(wrapper).toContain("normalizeFetchResponse(await fetchHandler(request, env))");
     expect(wrapper).toContain('from "tako.sh/internal";');
   });
 

@@ -1328,13 +1328,13 @@ maybe_prompt_server_name() {
   # Interactive prompt
   if [ -t 0 ] 2>/dev/null; then
     printf 'Server name (used in metrics) [%s]: ' "$default_name"
-    IFS= read -r TAKO_SERVER_NAME
+    IFS= read -r TAKO_SERVER_NAME || TAKO_SERVER_NAME=""
     if [ -z "$TAKO_SERVER_NAME" ]; then
       TAKO_SERVER_NAME="$default_name"
     fi
   elif [ -e /dev/tty ]; then
     printf 'Server name (used in metrics) [%s]: ' "$default_name" > /dev/tty
-    IFS= read -r TAKO_SERVER_NAME < /dev/tty
+    IFS= read -r TAKO_SERVER_NAME < /dev/tty || TAKO_SERVER_NAME=""
     if [ -z "$TAKO_SERVER_NAME" ]; then
       TAKO_SERVER_NAME="$default_name"
     fi

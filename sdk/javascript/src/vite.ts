@@ -60,7 +60,7 @@ if (!fetchHandler) {
 
 const channels = bootstrapChannels({ appDir: process.cwd() }).then((result) => result.registry);
 
-export default async function(request) {
+export default async function(request, env) {
   const [appName = ""] = (process.env.TAKO_APP_NAME ?? "app").split("/");
   const discoveredChannels = await channels;
   const takoResponse = await handleTakoEndpoint(request, {
@@ -72,7 +72,7 @@ export default async function(request) {
     uptime_seconds: 0,
   }, discoveredChannels);
   if (takoResponse) return takoResponse;
-  return normalizeFetchResponse(await fetchHandler(request));
+  return normalizeFetchResponse(await fetchHandler(request, env));
 };
 `;
 }
