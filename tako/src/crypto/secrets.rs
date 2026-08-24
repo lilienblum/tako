@@ -184,14 +184,6 @@ impl KeyStore {
         })
     }
 
-    /// Create a key store with a custom path
-    pub fn with_path(path: PathBuf) -> Self {
-        Self {
-            key_id: None,
-            key_path: path,
-        }
-    }
-
     /// Get key id when this store is tied to an environment key.
     pub fn key_id(&self) -> Option<&str> {
         self.key_id.as_deref()

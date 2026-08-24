@@ -183,55 +183,60 @@ pub(super) async fn sync_secrets(
     let mut success_count = 0;
     let mut error_count = 0;
 
+    // Decrypt each environment once; servers sharing an environment reuse it.
+    let mut decrypted_envs: std::collections::HashMap<
+        &str,
+        std::collections::HashMap<String, String>,
+    > = std::collections::HashMap::new();
+
     for (env_name, server_name, server) in &sync_targets {
         let _scope = output::scope(server_name).entered();
         let _t = output::timed(&format!("Sync secrets ({env_name})"));
-        // Get decrypted secrets for this environment
-        let env_secrets = match secrets.get_env(env_name) {
-            Some(encrypted_secrets) => {
-                let key = load_secret_key(env_name, &secrets, Some(&context.project_dir))?;
-                let mut decrypted = std::collections::HashMap::new();
-                let mut decrypt_error = None;
-                for (name, encrypted_value) in encrypted_secrets {
-                    match decrypt(&encrypted_value.value, &key) {
-                        Ok(value) => {
-                            decrypted.insert(name.clone(), value);
-                        }
-                        Err(e) => {
-                            decrypt_error = Some((name.clone(), e));
-                            break;
-                        }
-                    }
-                }
-                // Syncing a partial set would delete the failed secret on the
-                // server and restart the app without it — fail this env instead.
-                if let Some((name, e)) = decrypt_error {
-                    output::error(&format!(
-                        "Failed to decrypt {} — {} not synced: {}",
-                        output::strong(&name),
-                        output::strong(env_name),
-                        e
-                    ));
-                    error_count += 1;
-                    continue;
-                }
-                decrypted
-            }
-            None => {
+
+        if !decrypted_envs.contains_key(env_name.as_str()) {
+            let Some(encrypted_secrets) = secrets.get_env(env_name) else {
                 output::warning(&format!(
                     "No secrets for environment {}",
                     output::strong(env_name)
                 ));
                 continue;
+            };
+            let key = load_secret_key(env_name, &secrets, Some(&context.project_dir))?;
+            let mut decrypted = std::collections::HashMap::new();
+            let mut decrypt_error = None;
+            for (name, encrypted_value) in encrypted_secrets {
+                match decrypt(&encrypted_value.value, &key) {
+                    Ok(value) => {
+                        decrypted.insert(name.clone(), value);
+                    }
+                    Err(e) => {
+                        decrypt_error = Some((name.clone(), e));
+                        break;
+                    }
+                }
             }
-        };
+            // Syncing a partial set would delete the failed secret on the
+            // server and restart the app without it — fail this env instead.
+            if let Some((name, e)) = decrypt_error {
+                output::error(&format!(
+                    "Failed to decrypt {} — {} not synced: {}",
+                    output::strong(&name),
+                    output::strong(env_name),
+                    e
+                ));
+                error_count += 1;
+                continue;
+            }
+            decrypted_envs.insert(env_name.as_str(), decrypted);
+        }
 
+        let env_secrets = &decrypted_envs[env_name.as_str()];
         if env_secrets.is_empty() {
             continue;
         }
 
         let remote_app_name = tako_core::deployment_app_id(&app_name, env_name);
-        match sync_to_server(&remote_app_name, server, &env_secrets).await {
+        match sync_to_server(&remote_app_name, server, env_secrets).await {
             Ok(()) => {
                 tracing::debug!("Synced {} secret(s) for {env_name}", env_secrets.len());
                 success_count += 1;

@@ -138,6 +138,14 @@ impl BuildExecutor {
         }
     }
 
+    /// True when generate_version would embed a content hash (no git commit, or dirty tree).
+    pub fn version_needs_content_hash(&self) -> Result<bool, BuildError> {
+        if self.get_git_commit().is_err() {
+            return Ok(true);
+        }
+        self.is_git_dirty()
+    }
+
     /// Create a deployment archive (.tar.zst)
     pub fn create_archive(
         &self,

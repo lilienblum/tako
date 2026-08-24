@@ -762,23 +762,6 @@ fn test_creates_parent_directory() {
 // ==================== Utility Tests ====================
 
 #[test]
-fn test_count_by_env() {
-    let mut store = SecretsStore::default();
-
-    store.ensure_env_key_id("production").unwrap();
-    store.set("production", "API_KEY", "1".to_string()).unwrap();
-    store
-        .set("production", "DATABASE_URL", "2".to_string())
-        .unwrap();
-    store.ensure_env_key_id("staging").unwrap();
-    store.set("staging", "API_KEY", "3".to_string()).unwrap();
-
-    let counts = store.count_by_env();
-    assert_eq!(counts.get("production"), Some(&2));
-    assert_eq!(counts.get("staging"), Some(&1));
-}
-
-#[test]
 fn test_total_count() {
     let mut store = SecretsStore::default();
 

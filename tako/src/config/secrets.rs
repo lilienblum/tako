@@ -273,6 +273,12 @@ impl SecretsStore {
         let mut f = opts
             .open(path.as_ref())
             .map_err(|e| ConfigError::FileWrite(path.as_ref().to_path_buf(), e))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            f.set_permissions(fs::Permissions::from_mode(0o600))
+                .map_err(|e| ConfigError::FileWrite(path.as_ref().to_path_buf(), e))?;
+        }
         f.write_all(content.as_bytes())
             .map_err(|e| ConfigError::FileWrite(path.as_ref().to_path_buf(), e))?;
 
@@ -441,13 +447,6 @@ impl SecretsStore {
 
     /// Get secrets map for an environment
     pub fn get_env(&self, env: &str) -> Option<&HashMap<String, EncryptedSecretValue>> {
-        self.get_env_secret_entries(env)
-    }
-
-    pub fn get_env_secret_entries(
-        &self,
-        env: &str,
-    ) -> Option<&HashMap<String, EncryptedSecretValue>> {
         self.environments
             .get(env)
             .map(|env_secrets| &env_secrets.app)
@@ -604,14 +603,6 @@ impl SecretsStore {
     /// Check if all secrets are present in all environments
     pub fn is_consistent(&self) -> bool {
         self.find_discrepancies().is_empty()
-    }
-
-    /// Get secrets count per environment
-    pub fn count_by_env(&self) -> HashMap<String, usize> {
-        self.environments
-            .iter()
-            .map(|(env, env_secrets)| (env.clone(), env_secrets.app.len()))
-            .collect()
     }
 
     /// Check if empty

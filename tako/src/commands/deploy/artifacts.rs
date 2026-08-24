@@ -17,7 +17,7 @@ use super::format::{
 };
 use super::manifest::{
     build_container_deploy_archive_manifest, build_deploy_archive_manifest, decrypt_deploy_secrets,
-    resolve_deploy_main, resolve_deploy_version_and_source_hash, resolve_git_commit_message,
+    resolve_deploy_main, resolve_deploy_version, resolve_git_commit_message,
 };
 use super::task_tree::{ArtifactBuildGroup, DeployTaskTreeController};
 
@@ -74,8 +74,7 @@ pub(super) async fn prepare_build_phase(
             }
         }
     }
-    let (version, _source_hash) = resolve_deploy_version_and_source_hash(&executor, &source_root)
-        .map_err(|e| e.to_string())?;
+    let version = resolve_deploy_version(&executor, &source_root).map_err(|e| e.to_string())?;
     let git_commit_message = resolve_git_commit_message(&source_root);
     let git_dirty = executor.is_git_dirty().ok();
     tracing::debug!("Version: {}", version);

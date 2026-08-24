@@ -62,13 +62,17 @@ impl DeployReleaseKind {
     }
 }
 
-pub(super) fn resolve_deploy_version_and_source_hash(
+pub(super) fn resolve_deploy_version(
     executor: &BuildExecutor,
     source_root: &Path,
-) -> Result<(String, String), BuildError> {
+) -> Result<String, BuildError> {
+    // Hashing walks and reads every source file; skip it when the version is
+    // derived from git alone (clean checkout).
+    if !executor.version_needs_content_hash()? {
+        return executor.generate_version(None);
+    }
     let source_hash = executor.compute_source_hash(source_root)?;
-    let version = executor.generate_version(Some(&source_hash))?;
-    Ok((version, source_hash))
+    executor.generate_version(Some(&source_hash))
 }
 
 pub(super) fn resolve_git_commit_message(source_root: &Path) -> Option<String> {
@@ -445,8 +449,7 @@ mod tests {
 
         let executor = BuildExecutor::new(temp.path());
         let source_hash = executor.compute_source_hash(&source_root).unwrap();
-        let (version, _source_hash) =
-            resolve_deploy_version_and_source_hash(&executor, &source_root).unwrap();
+        let version = resolve_deploy_version(&executor, &source_root).unwrap();
 
         assert_eq!(version, format!("nogit_{}", &source_hash[..8]));
     }

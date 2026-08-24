@@ -441,7 +441,9 @@ pub(crate) fn decrypt_ssl_binding(
     };
     let key = crate::commands::secret::load_secret_key(env, secrets, usage_path)?;
     let token = crate::crypto::decrypt(&encrypted.value, &key)?;
-    validate_cloudflare_token_for_ssl_binding(provider, routes, &token)?;
+    if token.trim().is_empty() {
+        return Err(format!("Credential {SSL_CLOUDFLARE_CREDENTIAL_NAME} cannot be empty.").into());
+    }
     Ok(tako_core::SslBinding {
         provider,
         cloudflare_api_token: Some(token),
@@ -463,19 +465,6 @@ pub(crate) fn decrypt_runtime_credentials(
     let mut decrypted = std::collections::HashMap::with_capacity(1);
     decrypted.insert(POSTGRES_CREDENTIAL_NAME.to_string(), value);
     Ok(decrypted)
-}
-
-fn validate_cloudflare_token_for_ssl_binding(
-    _provider: tako_core::SslProvider,
-    _routes: &[String],
-    token: &str,
-) -> Result<(), String> {
-    if token.trim().is_empty() {
-        return Err(format!(
-            "Credential {SSL_CLOUDFLARE_CREDENTIAL_NAME} cannot be empty."
-        ));
-    }
-    Ok(())
 }
 
 pub(crate) fn missing_ssl_cloudflare_credential_message(
@@ -731,25 +720,5 @@ mod tests {
                 Some("postgres://runtime")
             );
         });
-    }
-
-    #[test]
-    fn letsencrypt_wildcard_accepts_cloudflare_account_api_tokens() {
-        validate_cloudflare_token_for_ssl_binding(
-            tako_core::SslProvider::LetsEncrypt,
-            &["*.example.com".to_string()],
-            "cfat_test_account_token",
-        )
-        .unwrap();
-    }
-
-    #[test]
-    fn cloudflare_ssl_accepts_cloudflare_account_api_tokens() {
-        validate_cloudflare_token_for_ssl_binding(
-            tako_core::SslProvider::Cloudflare,
-            &["*.example.com".to_string()],
-            "cfat_test_account_token",
-        )
-        .unwrap();
     }
 }
