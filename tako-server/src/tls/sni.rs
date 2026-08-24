@@ -206,9 +206,7 @@ impl TlsAccept for SniCertResolver {
                         tracing::warn!("No SNI hostname in TLS handshake");
                     }
                 }
-                if should_allow_default_cert_fallback_for_missing_sni() {
-                    self.set_default_cert(ssl, "no-sni");
-                }
+                self.set_default_cert(ssl, "no-sni");
                 return;
             }
         };
@@ -279,18 +277,4 @@ impl TlsAccept for SniCertResolver {
 /// Create TLS callbacks for SNI-based certificate selection
 pub fn create_sni_callbacks(cert_manager: Arc<CertManager>) -> Box<dyn TlsAccept + Send + Sync> {
     Box::new(SniCertResolver::new(cert_manager))
-}
-
-fn should_allow_default_cert_fallback_for_missing_sni() -> bool {
-    true
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn default_cert_fallback_for_missing_sni_is_enabled() {
-        assert!(should_allow_default_cert_fallback_for_missing_sni());
-    }
 }

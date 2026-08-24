@@ -225,7 +225,9 @@ pub(super) fn compression_decision(
         return skip(CompressionSkipReason::Upgrade, false);
     }
 
-    if !response.status.is_success() {
+    // 206 Partial Content must keep its exact byte range; re-encoding the body
+    // while keeping Content-Range would corrupt range responses.
+    if !response.status.is_success() || response.status.as_u16() == 206 {
         return skip(CompressionSkipReason::IneligibleStatus, false);
     }
 
@@ -512,6 +514,24 @@ mod tests {
             CompressionDecision::Skip {
                 reason: CompressionSkipReason::MissingAcceptEncoding,
                 vary_required: true
+            }
+        );
+    }
+
+    #[test]
+    fn skips_range_responses() {
+        let request = request(Some("gzip"));
+        let mut response = response("application/json", MIN_COMPRESS_BODY_BYTES);
+        response.status = pingora_http::StatusCode::PARTIAL_CONTENT;
+        response
+            .insert_header("Content-Range", "bytes 0-99/1000")
+            .expect("insert content range");
+
+        assert_eq!(
+            compression_decision(&request, &response),
+            CompressionDecision::Skip {
+                reason: CompressionSkipReason::IneligibleStatus,
+                vary_required: false
             }
         );
     }

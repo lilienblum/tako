@@ -323,7 +323,15 @@ async fn handle_release_artifact_upload(
         );
     }
 
-    let store_result = state.store_uploaded_release_artifact(&app, &version, &temp_path);
+    let store_result = tokio::task::spawn_blocking({
+        let state = state.clone();
+        let app = app.clone();
+        let version = version.clone();
+        let temp_path = temp_path.clone();
+        move || state.store_uploaded_release_artifact(&app, &version, &temp_path)
+    })
+    .await
+    .unwrap_or_else(|error| Err(format!("release artifact worker failed: {error}")));
     let _ = tokio::fs::remove_file(&temp_path).await;
     match store_result {
         Ok(plan) => json_response(StatusCode::OK, &tako_core::Response::ok(plan)),

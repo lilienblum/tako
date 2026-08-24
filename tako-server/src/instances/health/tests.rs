@@ -176,14 +176,8 @@ async fn test_probe_uses_tcp_when_port_is_configured() {
         let _ = tokio::io::AsyncWriteExt::write_all(&mut socket, response.as_bytes()).await;
     });
 
-    let healthy = probe_instance_health(
-        &instance,
-        "tako",
-        "/status",
-        true,
-        Duration::from_millis(200),
-    )
-    .await;
+    let healthy =
+        probe_instance_health(&instance, "tako", "/status", Duration::from_millis(200)).await;
     assert!(healthy.is_ok());
 }
 
@@ -239,14 +233,8 @@ async fn test_probe_reads_split_response_headers() {
         }
     });
 
-    let healthy = probe_instance_health(
-        &instance,
-        "tako",
-        "/status",
-        true,
-        Duration::from_millis(200),
-    )
-    .await;
+    let healthy =
+        probe_instance_health(&instance, "tako", "/status", Duration::from_millis(200)).await;
     assert!(healthy.is_ok());
 }
 
@@ -257,15 +245,9 @@ async fn test_probe_reports_connect_failure_reason() {
     let instance = app.allocate_instance();
     instance.set_port(0);
 
-    let failure = probe_instance_health(
-        &instance,
-        "tako",
-        "/status",
-        true,
-        Duration::from_millis(200),
-    )
-    .await
-    .expect_err("closed port should fail");
+    let failure = probe_instance_health(&instance, "tako", "/status", Duration::from_millis(200))
+        .await
+        .expect_err("closed port should fail");
 
     assert_eq!(failure.reason, "connect_failed");
     assert!(!failure.detail.is_empty());
@@ -291,15 +273,9 @@ async fn test_probe_reports_missing_internal_token_reason() {
         let _ = tokio::io::AsyncWriteExt::write_all(&mut socket, response.as_bytes()).await;
     });
 
-    let failure = probe_instance_health(
-        &instance,
-        "tako",
-        "/status",
-        true,
-        Duration::from_millis(200),
-    )
-    .await
-    .expect_err("response without echoed token should fail");
+    let failure = probe_instance_health(&instance, "tako", "/status", Duration::from_millis(200))
+        .await
+        .expect_err("response without echoed token should fail");
 
     assert_eq!(failure.reason, "missing_internal_token");
 }
@@ -334,14 +310,8 @@ async fn test_container_probe_requires_internal_token() {
         let _ = tokio::io::AsyncWriteExt::write_all(&mut socket, response.as_bytes()).await;
     });
 
-    let failure = probe_instance_health(
-        &instance,
-        "tako",
-        "/status",
-        true,
-        Duration::from_millis(200),
-    )
-    .await;
+    let failure =
+        probe_instance_health(&instance, "tako", "/status", Duration::from_millis(200)).await;
     let failure = failure.expect_err("plain container status must not satisfy SDK health probe");
     assert_eq!(failure.reason, "missing_internal_token");
 }

@@ -196,7 +196,6 @@ impl HealthChecker {
             instance,
             &health_host,
             &health_path,
-            true,
             self.config.probe_timeout,
         )
         .await;
@@ -319,7 +318,6 @@ async fn probe_instance_health(
     instance: &Instance,
     health_host: &str,
     health_path: &str,
-    require_internal_token: bool,
     probe_timeout: Duration,
 ) -> Result<(), HealthProbeFailure> {
     let Some(endpoint) = instance.endpoint() else {
@@ -332,7 +330,7 @@ async fn probe_instance_health(
         endpoint,
         health_host,
         health_path,
-        require_internal_token.then_some(instance.internal_token()),
+        Some(instance.internal_token()),
         probe_timeout,
     )
     .await
@@ -382,6 +380,8 @@ async fn probe_endpoint_tcp(
     http_response_is_success(&response, internal_token)
 }
 
+const MAX_HEALTH_RESPONSE_BYTES: usize = 4096;
+
 async fn read_http_response_headers(
     socket: &mut tokio::net::TcpStream,
     io_timeout: Duration,
@@ -410,6 +410,12 @@ async fn read_http_response_headers(
         }
 
         response.extend_from_slice(&chunk[..bytes_read]);
+        if response.len() > MAX_HEALTH_RESPONSE_BYTES {
+            return Err(HealthProbeFailure::new(
+                "oversized_response",
+                "response headers exceeded size limit",
+            ));
+        }
         if response.windows(4).any(|window| window == b"\r\n\r\n") {
             break;
         }

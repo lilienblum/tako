@@ -18,8 +18,6 @@ use pingora_proxy::{HttpProxy, http_proxy};
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 #[cfg(unix)]
 use std::os::unix::io::{AsRawFd, FromRawFd};
-#[cfg(windows)]
-use std::os::windows::io::{AsRawSocket, FromRawSocket};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncRead;
@@ -175,12 +173,7 @@ impl ServiceTrait for ProxyProtocolService {
     ) {
         let mut endpoints = Vec::with_capacity(self.endpoints.len());
         for endpoint in &self.endpoints {
-            #[cfg(unix)]
             let listener = bind_listener(&endpoint.address, fds.clone())
-                .await
-                .expect("Failed to build PROXY protocol listener");
-            #[cfg(windows)]
-            let listener = bind_listener(&endpoint.address)
                 .await
                 .expect("Failed to build PROXY protocol listener");
             endpoints.push(BuiltProxyProtocolEndpoint {
@@ -243,25 +236,9 @@ async fn bind_listener(
     bind_new_listener(address).await
 }
 
-#[cfg(windows)]
-async fn bind_listener(address: &ServerAddress) -> Result<Listener> {
-    bind_new_listener(address).await
-}
-
 #[cfg(unix)]
 fn listener_from_raw_fd(fd: std::os::unix::io::RawFd) -> Result<Listener> {
     let std_listener = unsafe { std::net::TcpListener::from_raw_fd(fd) };
-    std_listener
-        .set_nonblocking(true)
-        .or_err(ErrorType::BindError, "failed to set listener nonblocking")?;
-    let listener = tokio::net::TcpListener::from_std(std_listener)
-        .or_err(ErrorType::BindError, "failed to convert inherited listener")?;
-    Ok(listener.into())
-}
-
-#[cfg(windows)]
-fn listener_from_raw_socket(socket: std::os::windows::io::RawSocket) -> Result<Listener> {
-    let std_listener = unsafe { std::net::TcpListener::from_raw_socket(socket) };
     std_listener
         .set_nonblocking(true)
         .or_err(ErrorType::BindError, "failed to set listener nonblocking")?;
@@ -443,10 +420,7 @@ fn stream_peer_addr(stream: &L4Stream) -> Option<SocketAddr> {
 }
 
 fn set_stream_peer_addr(stream: &mut L4Stream, source_addr: SocketAddr) {
-    #[cfg(unix)]
     let digest = SocketDigest::from_raw_fd(stream.as_raw_fd());
-    #[cfg(windows)]
-    let digest = SocketDigest::from_raw_socket(stream.as_raw_socket());
     let _ = digest
         .peer_addr
         .set(Some(PingoraSocketAddr::Inet(source_addr)));
