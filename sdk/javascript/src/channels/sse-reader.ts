@@ -226,7 +226,7 @@ function headersRecord(
   headers: Record<string, string> | undefined,
   lastEventId: string | undefined,
 ): Record<string, string> {
-  const out = { ...(headers ?? {}) };
+  const out = { ...headers };
   if (lastEventId !== undefined) {
     out["Last-Event-ID"] = lastEventId;
   }

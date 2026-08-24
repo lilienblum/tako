@@ -1,9 +1,5 @@
 pub(super) fn resolve_os() -> &'static str {
-    match std::env::consts::OS {
-        "macos" => "macos",
-        "linux" => "linux",
-        other => other,
-    }
+    std::env::consts::OS
 }
 
 pub(super) fn resolve_arch() -> &'static str {

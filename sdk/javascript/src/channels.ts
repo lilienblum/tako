@@ -112,7 +112,7 @@ function headersWithAuthorization(
   const value = authorizationHeader(authorization);
   if (!value) return headers;
   if (explicitAuthorizationHeader(headers) !== undefined) return headers;
-  return { ...(headers ?? {}), Authorization: value };
+  return { ...headers, Authorization: value };
 }
 
 function defaultWebSocketFactory(url: string): unknown {

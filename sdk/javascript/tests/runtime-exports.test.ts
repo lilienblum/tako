@@ -13,7 +13,8 @@ test("tako.sh exports the app runtime object", async () => {
   const mod = await import("../src/index");
   expect(typeof mod.tako).toBe("object");
   expect(typeof mod.tako.logger.info).toBe("function");
-  expect(mod.tako.secrets.toString()).toBe("[REDACTED]");
+  const secrets: { toString(): string } = mod.tako.secrets;
+  expect(secrets.toString()).toBe("[REDACTED]");
   expect(typeof mod.tako.storages).toBe("object");
   expect(typeof mod.tako.cache.get).toBe("function");
   expect(typeof mod.tako.cache.put).toBe("function");

@@ -255,7 +255,7 @@ impl WorkerSupervisor {
     /// state; a clean exit (code 0) or an exit after at least one claim
     /// is treated as normal idle-out.
     fn process_exits(state: &mut State, log_sink: Option<&WorkerLogSink>) {
-        let entries: Vec<ChildEntry> = state.children.drain(..).collect();
+        let entries: Vec<ChildEntry> = std::mem::take(&mut state.children);
         let mut still_live = Vec::with_capacity(entries.len());
         let mut cold_crashes: Vec<(Option<i32>, Duration)> = Vec::new();
         for mut entry in entries {
@@ -324,7 +324,7 @@ impl WorkerSupervisor {
         let mut children: Vec<ChildEntry> = {
             let mut state = self.state.lock();
             state.shutting_down = true;
-            state.children.drain(..).collect()
+            std::mem::take(&mut state.children)
         };
 
         for entry in &children {
@@ -370,7 +370,7 @@ impl WorkerSupervisor {
         let mut children: Vec<ChildEntry> = {
             let mut state = self.state.lock();
             state.shutting_down = true;
-            state.children.drain(..).collect()
+            std::mem::take(&mut state.children)
         };
 
         for entry in &children {

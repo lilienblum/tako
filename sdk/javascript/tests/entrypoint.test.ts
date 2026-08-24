@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { openSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { spawn } from "node:child_process";
 import path from "node:path";
@@ -228,8 +229,7 @@ test("readiness signal writes the bound port to a pipe fd instead of stdout", as
       ),
     ]);
 
-    const readyWriter = await open(readyPipe, "w");
-    signalReadyPortOnFd(readyWriter.fd, 4321);
+    signalReadyPortOnFd(openSync(readyPipe, "w"), 4321);
 
     const readyLine = await readyLinePromise;
     expect(readyLine).toBe("4321");

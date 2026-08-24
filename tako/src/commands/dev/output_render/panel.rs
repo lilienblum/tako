@@ -249,21 +249,19 @@ pub(in crate::commands::dev) fn format_panel_stacked(
         ));
     }
     let url_avail = inner_w.saturating_sub(2 + ROUTES_LABEL_W);
-    let mut visible_routes = 0;
-    for host in hosts {
+    for (i, host) in hosts.iter().enumerate() {
         let url = if port == 443 {
             format!("https://{host}")
         } else {
             format!("https://{host}:{port}")
         };
-        let label = if visible_routes == 0 {
+        let label = if i == 0 {
             label_cell("routes")
         } else {
             " ".repeat(ROUTES_LABEL_W)
         };
         let line = url_panel_line(&label, &url, url_avail, &url_color);
         rows.push(stacked_row(&line, inner_w));
-        visible_routes += 1;
     }
     for line in share_row_lines("lan", 'l', &share_rows.lan, url_avail) {
         rows.push(stacked_row(&line, inner_w));

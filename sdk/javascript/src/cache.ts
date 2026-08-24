@@ -22,6 +22,7 @@ type SqliteDatabaseConstructor = new (path: string) => SqliteDatabase;
 
 const databasePromises = new Map<string, Promise<SqliteDatabase>>();
 
+// oxlint-disable-next-line typescript/no-implied-eval
 const runtimeImport = new Function("specifier", "return import(specifier)") as <T>(
   specifier: string,
 ) => Promise<T>;

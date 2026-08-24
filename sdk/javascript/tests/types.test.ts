@@ -21,10 +21,14 @@ function expectTypescriptToPass(source: string): void {
   writeFileSync(filename, source);
 
   try {
-    const configPath = ts.findConfigFile(sdkRoot, ts.sys.fileExists, "tsconfig.json");
+    const configPath = ts.findConfigFile(
+      sdkRoot,
+      (file) => ts.sys.fileExists(file),
+      "tsconfig.json",
+    );
     if (!configPath) throw new Error("Missing sdk/javascript/tsconfig.json");
 
-    const config = ts.readConfigFile(configPath, ts.sys.readFile);
+    const config = ts.readConfigFile(configPath, (file) => ts.sys.readFile(file));
     if (config.error) {
       throw new Error(ts.flattenDiagnosticMessageText(config.error.messageText, "\n"));
     }
