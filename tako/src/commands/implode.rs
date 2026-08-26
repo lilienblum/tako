@@ -110,7 +110,9 @@ fn gather_user_targets() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let data_dir = crate::paths::tako_data_dir()?;
     let binaries = find_tako_binaries();
 
-    Ok(gather_user_targets_from(config_dir, data_dir, binaries))
+    let mut targets = gather_user_targets_from(config_dir, data_dir, binaries);
+    targets.extend(super::completions::existing_files());
+    Ok(targets)
 }
 
 fn gather_user_targets_from(

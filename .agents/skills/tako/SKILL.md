@@ -266,6 +266,18 @@ Show CLI version.
 
 Upgrade the Tako CLI.
 
+
+### `tako completions [--yes]`
+
+Install bash, zsh, and fish completions for shells on `PATH`.
+
+```bash
+tako completions
+tako completions --yes
+```
+
+zsh is installed only when a writable directory is already on `fpath`.
+
 ### `tako uninstall [--yes]`
 
 Uninstall Tako and remove all local data.

@@ -75,6 +75,24 @@ fn uninstall_command_parses() {
 }
 
 #[test]
+fn completions_command_parses() {
+    let cli = Cli::try_parse_from(["tako", "completions"]).unwrap();
+    assert!(matches!(
+        cli.command,
+        Some(Commands::Completions { yes: false })
+    ));
+}
+
+#[test]
+fn completions_yes_flag_parses() {
+    let cli = Cli::try_parse_from(["tako", "completions", "--yes"]).unwrap();
+    assert!(matches!(
+        cli.command,
+        Some(Commands::Completions { yes: true })
+    ));
+}
+
+#[test]
 fn init_parses_without_runtime_flag() {
     let cli = Cli::try_parse_from(["tako", "init"]).unwrap();
     assert!(matches!(cli.command, Some(Commands::Init)));

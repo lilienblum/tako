@@ -1,5 +1,7 @@
 pub mod backups;
 pub mod codegen;
+pub mod completions;
+
 pub mod credentials;
 pub mod delete;
 pub mod deploy;

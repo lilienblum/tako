@@ -19,6 +19,10 @@ fn test_help_shows_commands() {
     assert!(out.contains("delete"), "Should list delete command");
     assert!(out.contains("servers"), "Should list servers command");
     assert!(out.contains("secrets"), "Should list secrets command");
+    assert!(
+        out.contains("completions"),
+        "Should list completions command"
+    );
 }
 
 #[test]

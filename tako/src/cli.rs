@@ -165,6 +165,13 @@ pub enum Commands {
     /// Upgrade the local tako CLI to the latest version
     Upgrade,
 
+    /// Install shell completions
+    Completions {
+        /// Skip confirmation prompts
+        #[arg(short = 'y', long = "yes")]
+        yes: bool,
+    },
+
     /// Deploy to an environment
     Deploy {
         /// Environment to deploy to
@@ -339,6 +346,11 @@ impl Cli {
                 upgrade::run()?;
                 json_success(json, "upgrade")
             }
+            Commands::Completions { yes } => {
+                commands::completions::run(yes)?;
+                json_success(json, "completions")
+            }
+
             Commands::Uninstall { yes } => {
                 commands::implode::run(yes)?;
                 json_success(json, "uninstall")
