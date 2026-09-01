@@ -19,8 +19,6 @@ pub(super) async fn list_secrets(
         return Ok(());
     }
 
-    output::section("Secrets");
-
     let all_names = secrets.all_secret_names();
     let all_envs = secrets.environment_names();
 

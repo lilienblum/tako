@@ -64,6 +64,52 @@ main = "index.ts"
 }
 
 #[test]
+fn test_secret_ls_prints_table_without_section_heading() {
+    let temp = TempDir::new().unwrap();
+    let project_dir = temp.path().to_path_buf();
+    let home = temp.path().join("home");
+    let tako_home = temp.path().join("tako-home");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&tako_home).unwrap();
+    write_secret_test_tako_toml(&project_dir);
+
+    let set_output = run_tako_with_stdin_and_env(
+        &["secrets", "set", "API_KEY", "--env", "production"],
+        &project_dir,
+        "secret123\n",
+        &home,
+        &tako_home,
+    );
+    assert!(
+        set_output.status.success(),
+        "secret set should succeed: {}{}",
+        stdout_str(&set_output),
+        stderr_str(&set_output)
+    );
+
+    let output = run_tako_with_env(&["secrets", "list"], &project_dir, &home, &tako_home);
+    let combined = format!("{}{}", stdout_str(&output), stderr_str(&output));
+
+    assert!(
+        output.status.success(),
+        "tako secrets list failed: {}",
+        combined
+    );
+    assert!(
+        combined.contains("API_KEY"),
+        "expected secret name in list output: {combined}"
+    );
+    assert!(
+        combined.contains("[set]"),
+        "expected set marker in list output: {combined}"
+    );
+    assert!(
+        !combined.lines().any(|line| line.trim() == "Secrets"),
+        "list output should not include a Secrets section heading: {combined}"
+    );
+}
+
+#[test]
 fn test_secret_set_reads_from_stdin() {
     let temp = TempDir::new().unwrap();
     let project_dir = temp.path().to_path_buf();
