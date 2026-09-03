@@ -7,17 +7,8 @@ COMPOSE_FILE="$REPO_ROOT/e2e/docker/compose.yml"
 PROJECT_NAME="tako-e2e"
 E2E_BIN_DIR="${E2E_BIN_DIR:-$REPO_ROOT/.e2e-bin}"
 E2E_BIN_STAMP_FILE="$E2E_BIN_DIR/.build-stamp"
-RUSTUP_BIN_DIR="${HOME}/.cargo/bin"
-CARGO_BIN="${RUSTUP_BIN_DIR}/cargo"
-RUSTC_BIN="${RUSTUP_BIN_DIR}/rustc"
-
-if [[ ! -x "$CARGO_BIN" ]]; then
-  CARGO_BIN="$(command -v cargo)"
-fi
-if [[ -x "$RUSTUP_BIN_DIR/cargo" ]] && [[ -x "$RUSTUP_BIN_DIR/rustc" ]]; then
-  export PATH="$RUSTUP_BIN_DIR:$PATH"
-  export RUSTC="$RUSTC_BIN"
-fi
+GLIBC_BUILDER_IMAGE="tako-e2e-builder-glibc"
+MUSL_BUILDER_IMAGE="tako-e2e-builder-musl"
 
 current_e2e_build_stamp() {
   local head arch dirty_suffix
@@ -63,27 +54,43 @@ if [[ ! -f "$E2E_BIN_DIR/glibc/tako" ]] || [[ ! -f "$E2E_BIN_STAMP_FILE" ]] || [
   echo "Building fresh E2E binaries at $E2E_BIN_DIR..."
   mkdir -p "$E2E_BIN_DIR/glibc" "$E2E_BIN_DIR/musl"
 
-  # Detect host arch → pick matching Linux target
-  ARCH_RAW=$(uname -m)
-  if [[ "$ARCH_RAW" == "arm64" || "$ARCH_RAW" == "aarch64" ]]; then
-    GLIBC_TARGET="aarch64-unknown-linux-gnu"
-    MUSL_TARGET="aarch64-unknown-linux-musl"
-  else
-    GLIBC_TARGET="x86_64-unknown-linux-gnu"
-    MUSL_TARGET="x86_64-unknown-linux-musl"
-  fi
-
-  "$CARGO_BIN" zigbuild -p tako-server -p tako-cli \
-    --bin tako --bin tako-dev-server --bin tako-server \
-    --release --target "$GLIBC_TARGET"
-  cp target/"$GLIBC_TARGET"/release/tako \
-     target/"$GLIBC_TARGET"/release/tako-dev-server \
-     target/"$GLIBC_TARGET"/release/tako-server \
+  docker build \
+    --file e2e/docker/builder/glibc.Dockerfile \
+    --tag "$GLIBC_BUILDER_IMAGE" \
+    .
+  docker run --rm \
+    --env CARGO_TARGET_DIR=/workspace/target/e2e-linux-glibc \
+    --env TAKO_BUILD_SHA="$(git rev-parse HEAD 2>/dev/null || true)" \
+    --volume "$REPO_ROOT:/workspace" \
+    --volume tako-e2e-cargo-git:/usr/local/cargo/git \
+    --volume tako-e2e-cargo-registry:/usr/local/cargo/registry \
+    --workdir /workspace \
+    "$GLIBC_BUILDER_IMAGE" \
+    cargo build -p tako-server -p tako-cli \
+      --bin tako --bin tako-dev-server --bin tako-server \
+      --locked --release
+  cp target/e2e-linux-glibc/release/tako \
+     target/e2e-linux-glibc/release/tako-dev-server \
+     target/e2e-linux-glibc/release/tako-server \
      "$E2E_BIN_DIR/glibc/"
 
   # musl build (used for Alpine)
-  if "$CARGO_BIN" zigbuild -p tako-server --release --target "$MUSL_TARGET" 2>"$E2E_BIN_DIR/musl-build.log"; then
-    cp target/"$MUSL_TARGET"/release/tako-server "$E2E_BIN_DIR/musl/"
+  docker build \
+    --file e2e/docker/builder/musl.Dockerfile \
+    --tag "$MUSL_BUILDER_IMAGE" \
+    .
+  if docker run --rm \
+    --env CARGO_TARGET_DIR=/workspace/target/e2e-linux-musl \
+    --env RUSTFLAGS="-C target-feature=-crt-static" \
+    --env TAKO_BUILD_SHA="$(git rev-parse HEAD 2>/dev/null || true)" \
+    --volume "$REPO_ROOT:/workspace" \
+    --volume tako-e2e-cargo-git:/usr/local/cargo/git \
+    --volume tako-e2e-cargo-registry:/usr/local/cargo/registry \
+    --workdir /workspace \
+    "$MUSL_BUILDER_IMAGE" \
+    cargo build -p tako-server --locked --release \
+    2>"$E2E_BIN_DIR/musl-build.log"; then
+    cp target/e2e-linux-musl/release/tako-server "$E2E_BIN_DIR/musl/"
     rm -f "$E2E_BIN_DIR/musl-build.log"
   else
     echo "musl build skipped (see .e2e-bin/musl-build.log for details)"

@@ -12,11 +12,11 @@ Requires the `tako` binary to be built first (`cargo build -p tako-cli`).
 
 ## Native Image Dependency
 
-Install libvips before running image-related server builds or tests locally: macOS `brew install vips`; Debian/Ubuntu `sudo apt-get update && sudo apt-get install -y --no-install-recommends libvips-dev libheif-plugin-aomenc`.
+Run `mise bootstrap` to install the repository toolchain, native libvips dependencies, and package dependencies. Full E2E also requires a running Docker engine with Compose support.
 
 Homebrew's `vips` formula includes the codec libraries Tako needs for JPEG, PNG, WebP, and AVIF transforms. Debian/Ubuntu split the AVIF encoder into `libheif-plugin-aomenc`, so install that alongside `libvips-dev`.
 
-Homebrew supplies native macOS libraries. Deploy E2E builds Linux `tako-server` binaries, so missing `libvips.so`, `libglib-2.0.so`, or `libgobject-2.0.so` during that link step means the Linux build environment needs libvips too.
+Deploy E2E builds Linux binaries inside pinned glibc and musl builder images, so their libvips dependencies do not depend on the host operating system.
 
 ## Docker E2E Fixtures
 

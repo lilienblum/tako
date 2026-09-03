@@ -581,7 +581,9 @@ run_universal_http_checks() {
 start_tako_server() {
   local host=$1
   local server_bin=$2
-  local server_config='{"server_name":"e2e","trusted_proxy":{"trusted_cidrs":["172.16.0.0/12"]}}'
+  # Docker-compatible engines use different RFC 1918 bridge ranges. Treat the
+  # isolated E2E network as the trusted proxy boundary on all of them.
+  local server_config='{"server_name":"e2e","trusted_proxy":{"trusted_cidrs":["10.0.0.0/8","172.16.0.0/12","192.168.0.0/16"]}}'
   scp_to "$server_bin" "$host" "/home/tako/tako-server"
   scp_to "$WORKSPACE/scripts/install-tako-server.sh" "$host" "/home/tako/install-tako-server.sh"
   ssh_exec "$host" "set -eu; chmod 0755 /home/tako/tako-server /home/tako/install-tako-server.sh; tar -cf - -C /home/tako tako-server | zstd -o /home/tako/tako-server.tar.zst; sha256sum /home/tako/tako-server.tar.zst | awk '{print \$1}' > /home/tako/tako-server.tar.zst.sha256"

@@ -4,9 +4,29 @@ bun = "1.4.0"
 go = "1.27.0"
 just = "1"
 hk = "1.56.1"
+zig = "0.16.0"
+"cargo:cargo-zigbuild" = "0.23.3"
 
 [bootstrap.packages]
 "brew:lychee" = "latest"
+"brew:cmake" = "latest"
+"brew:openssl@3" = "latest"
+"brew:pkgconf" = "latest"
+"brew:vips" = "latest"
+"apt:build-essential" = "latest"
+"apt:cmake" = "latest"
+"apt:libheif-plugin-aomenc" = "latest"
+"apt:libssl-dev" = "latest"
+"apt:libvips-dev" = "latest"
+"apt:pkg-config" = "latest"
+
+[tasks.bootstrap]
+description = "Install repository dependencies"
+run = [
+  "bun install --frozen-lockfile",
+  "cargo fetch --locked",
+  "go mod download",
+]
 
 [hooks]
 # Install/refresh git hooks whenever tools are installed
