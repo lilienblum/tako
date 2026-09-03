@@ -178,7 +178,7 @@ mod tests {
         let json = r#"{"command": "prepare_release", "app": "my-app", "path": "/var/lib/tako/my-app/releases/1.0.0"}"#;
         let cmd: Command = serde_json::from_str(json).unwrap();
         match cmd {
-            Command::PrepareRelease { app, path } => {
+            Command::PrepareRelease { app, path, .. } => {
                 assert_eq!(app, "my-app");
                 assert!(path.contains("releases"));
             }
@@ -203,6 +203,7 @@ mod tests {
                 storages,
                 ssl,
                 backup,
+                ..
             } => {
                 assert_eq!(app, "my-app");
                 assert_eq!(version, "1.0.0");

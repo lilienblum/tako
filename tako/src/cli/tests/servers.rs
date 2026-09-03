@@ -204,19 +204,35 @@ fn servers_reload_parses_with_force() {
 #[test]
 fn servers_upgrade_parses_without_name() {
     let cli = Cli::try_parse_from(["tako", "servers", "upgrade"]).unwrap();
-    let Commands::Servers(server::ServerCommands::Upgrade { name }) = cli.command.expect("command")
+    let Commands::Servers(server::ServerCommands::Upgrade { name, force }) =
+        cli.command.expect("command")
     else {
         panic!("expected Servers::Upgrade");
     };
     assert_eq!(name, None);
+    assert!(!force);
 }
 
 #[test]
 fn servers_upgrade_parses_with_name() {
     let cli = Cli::try_parse_from(["tako", "servers", "upgrade", "prod"]).unwrap();
-    let Commands::Servers(server::ServerCommands::Upgrade { name }) = cli.command.expect("command")
+    let Commands::Servers(server::ServerCommands::Upgrade { name, force }) =
+        cli.command.expect("command")
     else {
         panic!("expected Servers::Upgrade");
     };
     assert_eq!(name, Some("prod".to_string()));
+    assert!(!force);
+}
+
+#[test]
+fn servers_upgrade_parses_force() {
+    let cli = Cli::try_parse_from(["tako", "servers", "upgrade", "prod", "--force"]).unwrap();
+    let Commands::Servers(server::ServerCommands::Upgrade { name, force }) =
+        cli.command.expect("command")
+    else {
+        panic!("expected Servers::Upgrade");
+    };
+    assert_eq!(name, Some("prod".to_string()));
+    assert!(force);
 }

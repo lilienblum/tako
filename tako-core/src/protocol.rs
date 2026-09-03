@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, HashMap};
 use crate::storage::StorageBinding;
 
 pub const PROTOCOL_VERSION: u32 = 0;
+pub const UPGRADE_RELOAD_MARKER_FILE: &str = ".upgrade-reload";
 pub const MANAGEMENT_AUTH_NAMESPACE: &str = "tako-management-rpc-v0";
 pub const DEFAULT_BACKUP_RETENTION_DAYS: u16 = 30;
 pub const BACKUP_INTERVAL_SECS: i64 = 24 * 60 * 60;
@@ -84,7 +85,12 @@ pub enum Command {
     /// Download runtime and install production dependencies for a release.
     /// Called before `Deploy` so that the deploy step only does app registration
     /// and instance startup, keeping it fast.
-    PrepareRelease { app: String, path: String },
+    PrepareRelease {
+        app: String,
+        path: String,
+        #[serde(default)]
+        force: bool,
+    },
 
     /// Plan a release artifact upload. Returns the server-side release path and
     /// whether the artifact still needs to be uploaded.
@@ -102,6 +108,8 @@ pub enum Command {
         /// SSL certificate provider and optional provider credentials.
         #[serde(default)]
         ssl: SslBinding,
+        #[serde(default)]
+        force: bool,
     },
 
     /// Clear staged deploy metadata without deleting the release artifact.
@@ -136,6 +144,8 @@ pub enum Command {
         /// instead.
         #[serde(default)]
         secrets: HashMap<String, String>,
+        #[serde(default)]
+        force: bool,
     },
 
     /// Deploy a new version of an app
@@ -172,6 +182,8 @@ pub enum Command {
         /// existing backup configuration for the app is cleared.
         #[serde(default)]
         backup: Option<Box<BackupBinding>>,
+        #[serde(default)]
+        force: bool,
     },
 
     /// Create a backup for the app immediately. When backup is provided, the

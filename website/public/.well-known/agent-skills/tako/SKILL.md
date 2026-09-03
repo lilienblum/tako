@@ -189,7 +189,7 @@ Re-run after adding/removing secrets, storages, channel files, or workflow files
 
 ## Deployment
 
-### `tako deploy [--env <env>] [--yes]`
+### `tako deploy [--env <env>] [--yes] [--force]`
 
 Build locally and deploy to a Tako server.
 
@@ -197,7 +197,10 @@ Build locally and deploy to a Tako server.
 tako deploy
 tako deploy --env staging
 tako deploy --yes             # skip confirmation
+tako deploy --force           # attempt a protocol mismatch
 ```
+
+Deploy requires the CLI, server, and release artifact to use the same protocol version. A mismatch fails before release commands, workflows, or app processes start. `--force` attempts the mismatch but keeps validation and readiness checks enabled; it does not skip confirmation.
 
 ### `tako delete [--env <env>] [--server <name>] [--yes]`
 
@@ -251,9 +254,9 @@ Show status of all servers and deployed apps.
 
 Remove a server.
 
-### `tako servers upgrade [<name>]`
+### `tako servers upgrade [<name>] [--force]`
 
-Upgrade Tako on a server.
+Upgrade Tako on a server. The candidate must match the CLI and every active release before reload and is checked again after readiness. On failure, Tako restores and restarts the previous binary. `--force` attempts a protocol mismatch without disabling readiness or rollback.
 
 ## CLI Management
 

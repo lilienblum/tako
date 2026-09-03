@@ -24,7 +24,7 @@ async fn scale_command_persists_zero_instances_across_restore() {
     std::fs::create_dir_all(&release_dir).unwrap();
     std::fs::write(
         release_dir.join("app.json"),
-        r#"{"runtime":"node","main":"index.js","idle_timeout":300,"start":["/bin/sh","-lc","sleep 600"]}"#,
+        r#"{"protocol_version":0,"runtime":"node","main":"index.js","idle_timeout":300,"start":["/bin/sh","-lc","sleep 600"]}"#,
     )
     .unwrap();
 
@@ -103,7 +103,7 @@ async fn deploy_preserves_scaled_instance_count() {
     std::fs::create_dir_all(&current_release).unwrap();
     std::fs::write(
         current_release.join("app.json"),
-        r#"{"runtime":"node","main":"index.js","idle_timeout":300,"start":["/bin/sh","-lc","sleep 600"]}"#,
+        r#"{"protocol_version":0,"runtime":"node","main":"index.js","idle_timeout":300,"start":["/bin/sh","-lc","sleep 600"]}"#,
     )
     .unwrap();
 
@@ -139,7 +139,7 @@ async fn deploy_preserves_scaled_instance_count() {
     std::fs::create_dir_all(&broken_release).unwrap();
     std::fs::write(
         broken_release.join("app.json"),
-        r#"{"runtime":"node","main":"index.js","idle_timeout":300,"start":["/bin/sh","-lc","exit 1"]}"#,
+        r#"{"protocol_version":0,"runtime":"node","main":"index.js","idle_timeout":300,"start":["/bin/sh","-lc","exit 1"]}"#,
     )
     .unwrap();
 
@@ -155,6 +155,7 @@ async fn deploy_preserves_scaled_instance_count() {
             storages: Some(HashMap::new()),
             ssl: tako_core::SslBinding::default(),
             backup: None,
+            force: false,
         })
         .await;
 
@@ -256,7 +257,7 @@ async fn deploy_on_demand_validates_startup_and_fails_for_unhealthy_build() {
     std::fs::create_dir_all(&release_dir).unwrap();
     std::fs::write(
         release_dir.join("app.json"),
-        r#"{"runtime":"node","main":"index.js","idle_timeout":300,"install":"true","start":["/bin/sh","-lc","exit 1"]}"#,
+        r#"{"protocol_version":0,"runtime":"node","main":"index.js","idle_timeout":300,"install":"true","start":["/bin/sh","-lc","exit 1"]}"#,
     )
     .unwrap();
 
@@ -272,6 +273,7 @@ async fn deploy_on_demand_validates_startup_and_fails_for_unhealthy_build() {
             storages: Some(HashMap::new()),
             ssl: tako_core::SslBinding::default(),
             backup: None,
+            force: false,
         })
         .await;
 
@@ -398,6 +400,7 @@ HTTPServer(("127.0.0.1", port), Handler).serve_forever()
     std::fs::write(
         release_dir.join("app.json"),
         serde_json::json!({
+            "protocol_version": tako_core::PROTOCOL_VERSION,
             "runtime": "bun",
             "main": "index.ts",
             "idle_timeout": 300,
@@ -434,6 +437,7 @@ HTTPServer(("127.0.0.1", port), Handler).serve_forever()
             storages: Some(HashMap::new()),
             ssl: tako_core::SslBinding::default(),
             backup: None,
+            force: false,
         })
         .await;
     assert!(

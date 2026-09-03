@@ -197,9 +197,8 @@ fn test_upgrade_mode_rejects_concurrent_owners() {
     assert_eq!(resp.get("status").and_then(|s| s.as_str()), Some("ok"));
 }
 
-/// Verify that a stuck upgrade lock is cleared after a process restart
-/// (SIGHUP reload). Simulates Ctrl+C during upgrade: the old process dies
-/// with upgrading mode + lock held, the new process should start clean.
+/// Verify that a SIGHUP reload without an upgrade handoff clears a stale
+/// upgrade lock, so ordinary reload remains a recovery path after CLI failure.
 #[test]
 fn test_upgrade_lock_clears_after_reload() {
     if !require_localhost_bind() {
@@ -211,7 +210,7 @@ fn test_upgrade_lock_clears_after_reload() {
     // Enter upgrading mode (sets mode + acquires lock).
     let resp = server.send_command(&serde_json::json!({
         "command": "enter_upgrading",
-        "owner": "crashed-cli"
+        "owner": "controller-a"
     }));
     assert_eq!(resp.get("status").and_then(|s| s.as_str()), Some("ok"));
 
@@ -248,7 +247,7 @@ fn test_upgrade_lock_clears_after_reload() {
     }
     let new_pid = new_pid.expect("new server process should have a different PID after SIGHUP");
 
-    // New process should be in normal mode (not stuck upgrading).
+    // With no upgrade handoff marker, the new process treats the lock as stale.
     let info = server.send_command(&serde_json::json!({ "command": "server_info" }));
     let mode = info
         .get("data")
@@ -257,11 +256,10 @@ fn test_upgrade_lock_clears_after_reload() {
         .unwrap();
     assert_eq!(
         mode, "normal",
-        "server should reset to normal mode after restart"
+        "server should reset to normal mode after an ordinary reload"
     );
 
-    // A new owner should be able to enter upgrading immediately
-    // (no 10-minute stale wait).
+    // A new owner can acquire immediately (no stale-lock wait).
     let resp = server.send_command(&serde_json::json!({
         "command": "enter_upgrading",
         "owner": "new-cli"
@@ -269,14 +267,15 @@ fn test_upgrade_lock_clears_after_reload() {
     assert_eq!(
         resp.get("status").and_then(|s| s.as_str()),
         Some("ok"),
-        "new owner should acquire upgrade lock immediately after restart: {resp}"
+        "new owner should acquire the upgrade lock after reload: {resp}"
     );
 
-    // Clean up: exit upgrading and kill new process.
-    let _ = server.send_command(&serde_json::json!({
+    let resp = server.send_command(&serde_json::json!({
         "command": "exit_upgrading",
         "owner": "new-cli"
     }));
+    assert_eq!(resp.get("status").and_then(|s| s.as_str()), Some("ok"));
+
     unsafe {
         libc::kill(new_pid as i32, libc::SIGTERM);
     }

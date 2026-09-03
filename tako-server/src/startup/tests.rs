@@ -46,3 +46,15 @@ fn prepare_data_dir_is_idempotent() {
 
     assert_eq!(mode_of(&dir), 0o710);
 }
+
+#[test]
+fn upgrade_reload_marker_is_consumed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let marker = tmp.path().join(tako_core::UPGRADE_RELOAD_MARKER_FILE);
+    std::fs::write(&marker, "controller-a\n").unwrap();
+
+    let owner = take_upgrade_reload_owner(tmp.path()).unwrap();
+
+    assert_eq!(owner.as_deref(), Some("controller-a"));
+    assert!(!marker.exists());
+}

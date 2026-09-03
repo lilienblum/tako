@@ -57,6 +57,15 @@ fn remote_binary_replace_preserves_app_user_switch_capabilities() {
 }
 
 #[test]
+fn remote_binary_replace_finishes_runtime_setup_before_installing_candidate() {
+    let command = remote_binary_replace_uploaded_archive_command("/tmp/tako.tar.zst", "a");
+    let podman_setup = command.find("command -v podman").unwrap();
+    let candidate_install = command.find("install -m 0755 \"$bin\"").unwrap();
+
+    assert!(podman_setup < candidate_install);
+}
+
+#[test]
 fn remote_restore_previous_binary_preserves_app_user_switch_capabilities() {
     let command = remote_restore_previous_binary_command();
     assert!(command.contains("cap_net_bind_service,cap_setuid,cap_setgid,cap_kill=+ep"));
@@ -181,6 +190,37 @@ fn remote_restore_previous_binary_command_restores_prev_binary() {
 fn remote_cleanup_previous_binary_command_removes_prev_binary() {
     let cmd = remote_cleanup_previous_binary_command();
     assert!(cmd.contains("rm -f /usr/local/bin/tako-server.prev"));
+}
+
+#[test]
+fn protocol_compatibility_command_checks_cli_and_active_releases() {
+    let command = remote_protocol_compatibility_command("/opt/tako data", false);
+
+    assert!(command.contains("--check-protocol-compatibility"));
+    assert!(command.contains("--data-dir"));
+    assert!(command.contains("/opt/tako data"));
+    assert!(command.contains("--expected-protocol-version 0"));
+    assert!(!command.contains("--allow-incompatible-protocol"));
+}
+
+#[test]
+fn forced_protocol_compatibility_command_passes_override() {
+    let command = remote_protocol_compatibility_command("/opt/tako", true);
+
+    assert!(command.contains("--allow-incompatible-protocol"));
+}
+
+#[test]
+fn upgrade_reload_handoff_commands_write_and_remove_owner_marker() {
+    let prepare = remote_prepare_upgrade_reload_command("/opt/tako data", "controller-a");
+    let cleanup = remote_cleanup_upgrade_reload_command("/opt/tako data");
+
+    assert!(prepare.contains("umask 077"));
+    assert!(prepare.contains("chmod 0644"));
+    assert!(prepare.contains(tako_core::UPGRADE_RELOAD_MARKER_FILE));
+    assert!(prepare.contains("controller-a"));
+    assert!(cleanup.contains("rm -f"));
+    assert!(cleanup.contains(tako_core::UPGRADE_RELOAD_MARKER_FILE));
 }
 
 #[test]

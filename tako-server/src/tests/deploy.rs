@@ -27,6 +27,7 @@ async fn deploy_rejects_invalid_app_name() {
             storages: Some(HashMap::new()),
             ssl: tako_core::SslBinding::default(),
             backup: None,
+            force: false,
         })
         .await;
 
@@ -158,6 +159,7 @@ async fn failed_deploy_does_not_persist_ssl_credentials() {
                 cloudflare_api_token: Some("ssl-token".to_string()),
             },
             backup: None,
+            force: false,
         })
         .await;
 
@@ -198,6 +200,7 @@ async fn deploy_rejects_release_path_outside_managed_root() {
             storages: Some(HashMap::new()),
             ssl: tako_core::SslBinding::default(),
             backup: None,
+            force: false,
         })
         .await;
 
@@ -245,6 +248,7 @@ async fn deploy_rejects_invalid_release_version() {
             storages: Some(HashMap::new()),
             ssl: tako_core::SslBinding::default(),
             backup: None,
+            force: false,
         })
         .await;
 
@@ -255,6 +259,63 @@ async fn deploy_rejects_invalid_release_version() {
         message.contains("Invalid release version"),
         "got: {message}"
     );
+}
+
+#[tokio::test]
+async fn deploy_rejects_protocol_mismatch_before_registering_app() {
+    let temp = TempDir::new().unwrap();
+    let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
+        cert_dir: temp.path().join("certs"),
+        ..Default::default()
+    }));
+    let state = ServerState::new(
+        temp.path().to_path_buf(),
+        cert_manager,
+        None,
+        empty_challenge_tokens(),
+    )
+    .unwrap();
+    let app_id = "my-app/production";
+    let app_root = temp.path().join("apps/my-app/production");
+    let release_dir = app_root.join("releases/v1");
+    std::fs::create_dir_all(&release_dir).unwrap();
+    std::fs::write(
+        release_dir.join("app.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "protocol_version": tako_core::PROTOCOL_VERSION + 1,
+            "runtime": "bun",
+            "main": "index.ts",
+            "idle_timeout": 300,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let response = state
+        .handle_command(Command::Deploy {
+            app: app_id.to_string(),
+            version: "v1".to_string(),
+            path: release_dir.to_string_lossy().to_string(),
+            routes: vec!["app.localhost".to_string()],
+            source_ip: tako_core::SourceIpMode::Auto,
+            secrets: Some(HashMap::new()),
+            runtime_credentials: None,
+            storages: Some(HashMap::new()),
+            ssl: tako_core::SslBinding::default(),
+            backup: None,
+            force: false,
+        })
+        .await;
+
+    let Response::Error { message } = response else {
+        panic!("expected protocol mismatch, got: {response:?}");
+    };
+    assert!(
+        message.contains("Protocol version mismatch"),
+        "got: {message}"
+    );
+    assert!(state.app_manager.get_app(app_id).is_none());
+    assert!(!app_root.join("data").exists());
 }
 
 #[test]

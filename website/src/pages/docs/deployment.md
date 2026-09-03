@@ -58,9 +58,12 @@ Deploy targets the servers listed in `[envs.<env>].servers`. If production has n
 tako deploy
 tako deploy --env staging
 tako deploy --env production --yes
+tako deploy --force
 ```
 
 When `--env` is omitted, deploy targets `production`. In an interactive terminal, an implicit production deploy asks for confirmation — but only if `tako.toml` declares more than one deployable environment (`development` doesn't count). With a single environment, there's nothing the deploy could have implicitly missed, so it proceeds without asking. Passing `--env production`, `--yes`, or `-y` also skips the prompt by making the target explicit.
+
+The CLI, server, and release artifact must use the same protocol version. Tako checks before parallel deployment starts and again on each server before dependency preparation, release commands, workflow synchronization, or app startup. A mismatch fails the deploy without starting those workloads. `--force` attempts the incompatible deploy but does not skip validation or readiness checks; unlike `--yes`, it does not control confirmation prompts.
 
 Deploy validates secrets, storage credentials, provider credentials, routes, server target metadata, workflow/channel storage requirements, and local-storage limitations before build work starts.
 
@@ -177,10 +180,11 @@ If public HTTPS uses a non-default port, deploy summaries include that port and 
 tako servers reload la
 tako servers reload la --force
 tako servers upgrade la
+tako servers upgrade la --force
 tako servers uninstall la --yes
 ```
 
-`reload` is zero-downtime by default. `--force` performs a restart. `upgrade` installs a new `tako-server` binary, enters upgrade mode, reloads, waits for readiness, and rolls back to the previous binary if readiness fails. When the running server predates the current SQLite storage engine, `upgrade` restarts the service instead of reloading — a one-time brief downtime that prevents the two engines from sharing state databases. `uninstall` removes the remote service and data, then removes the local server entry.
+`reload` is zero-downtime by default. Its `--force` flag performs a restart. `upgrade` installs a candidate `tako-server` binary, enters upgrade mode, and checks its protocol against the CLI and every active release before reloading. It checks again after readiness. A mismatch fails before reload; any failure after reload begins restores and restarts the previous binary before upgrade mode ends. `upgrade --force` attempts a protocol mismatch but keeps readiness and rollback enabled. `uninstall` removes the remote service and data, then removes the local server entry.
 
 ## Logs And Releases
 

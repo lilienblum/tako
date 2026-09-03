@@ -181,6 +181,10 @@ pub enum Commands {
         /// Skip confirmation prompts
         #[arg(short = 'y', long = "yes")]
         yes: bool,
+
+        /// Attempt deployment despite a protocol version mismatch
+        #[arg(long)]
+        force: bool,
     },
 
     /// Delete a deployed app from a specific environment/server deployment
@@ -365,8 +369,8 @@ impl Cli {
                 command,
                 self.config.as_deref(),
             ),
-            Commands::Deploy { env, yes } => {
-                commands::deploy::run(env.as_deref(), yes, self.config.as_deref())?;
+            Commands::Deploy { env, yes, force } => {
+                commands::deploy::run(env.as_deref(), yes, force, self.config.as_deref())?;
                 json_success(json, "deploy")
             }
             Commands::Delete { env, server, yes } => {

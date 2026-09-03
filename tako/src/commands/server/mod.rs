@@ -76,6 +76,10 @@ pub enum ServerCommands {
     Upgrade {
         /// Server name (omit to upgrade all servers)
         name: Option<String>,
+
+        /// Attempt upgrade despite a protocol version mismatch
+        #[arg(long)]
+        force: bool,
     },
 
     /// Remove tako-server and all data from a server
@@ -149,7 +153,9 @@ async fn run_async(cmd: ServerCommands) -> Result<(), Box<dyn std::error::Error>
         ServerCommands::Remove { name } => crud::remove_server(name.as_deref()).await,
         ServerCommands::List => crud::list_servers().await,
         ServerCommands::Reload { name, force } => crud::restart_server(&name, force).await,
-        ServerCommands::Upgrade { name } => upgrade::upgrade_servers(name.as_deref()).await,
+        ServerCommands::Upgrade { name, force } => {
+            upgrade::upgrade_servers(name.as_deref(), force).await
+        }
         ServerCommands::Uninstall { name, yes } => uninstall_server_cmd(name.as_deref(), yes).await,
     }
 }

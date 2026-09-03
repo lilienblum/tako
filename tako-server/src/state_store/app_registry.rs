@@ -1,6 +1,34 @@
 use crate::instances::AppConfig;
 
-use super::{PersistedApp, SqliteStateStore, StateStoreError};
+use super::{PersistedApp, PersistedRelease, SqliteStateStore, StateStoreError};
+
+pub(crate) fn load_persisted_releases_read_only(
+    state_path: &std::path::Path,
+) -> Result<Vec<PersistedRelease>, StateStoreError> {
+    if !state_path.exists() {
+        return Ok(Vec::new());
+    }
+    let connection = rusqlite::Connection::open_with_flags(
+        state_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    let mut statement = connection.prepare(
+        "SELECT name, environment, version
+         FROM apps
+         ORDER BY name, environment;",
+    )?;
+    let releases = statement
+        .query_map([], |row| {
+            let name = row.get::<_, String>(0)?;
+            let environment = row.get::<_, String>(1)?;
+            Ok(PersistedRelease {
+                app_id: tako_core::deployment_app_id(&name, &environment),
+                version: row.get(2)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(releases)
+}
 
 impl SqliteStateStore {
     pub fn upsert_app(&self, config: &AppConfig, routes: &[String]) -> Result<(), StateStoreError> {

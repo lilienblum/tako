@@ -155,6 +155,34 @@ fn run_extract_archive_mode_requires_destination_flag() {
 }
 
 #[test]
+fn run_protocol_compatibility_mode_requires_data_dir() {
+    let args =
+        super::Args::try_parse_from(["tako-server", "--check-protocol-compatibility"]).unwrap();
+
+    let error = run_protocol_compatibility_mode(&args).unwrap_err();
+
+    assert!(error.contains("--data-dir"), "got: {error}");
+}
+
+#[test]
+fn run_protocol_compatibility_mode_requires_expected_protocol() {
+    let args = super::Args::try_parse_from([
+        "tako-server",
+        "--check-protocol-compatibility",
+        "--data-dir",
+        "/opt/tako",
+    ])
+    .unwrap();
+
+    let error = run_protocol_compatibility_mode(&args).unwrap_err();
+
+    assert!(
+        error.contains("--expected-protocol-version"),
+        "got: {error}"
+    );
+}
+
+#[test]
 fn install_rustls_crypto_provider_is_idempotent() {
     install_rustls_crypto_provider();
     assert!(rustls::crypto::CryptoProvider::get_default().is_some());

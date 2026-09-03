@@ -47,7 +47,7 @@ fn run_on_demand_case() -> Result<(), String> {
     write_bun_app(&app_dir, "hello");
     fs::write(
         app_dir.join("app.json"),
-        r#"{"runtime":"bun","main":"src/index.ts","idle_timeout":5,"install":"true","start":["bun","{main}"]}"#,
+        r#"{"protocol_version":0,"runtime":"bun","main":"src/index.ts","idle_timeout":5,"install":"true","start":["bun","{main}"]}"#,
     )
     .map_err(|e| e.to_string())?;
 
@@ -210,7 +210,7 @@ fn on_demand_startup_failure_does_not_hang() {
     .expect("write entrypoint");
     fs::write(
         app_dir.join("app.json"),
-        r#"{"runtime":"bun","main":"src/index.ts","idle_timeout":300,"install":"true","start":["bun","{main}"]}"#,
+        r#"{"protocol_version":0,"runtime":"bun","main":"src/index.ts","idle_timeout":300,"install":"true","start":["bun","{main}"]}"#,
     )
     .expect("write deploy manifest");
 

@@ -1,11 +1,19 @@
+mod compatibility;
+mod readiness;
 mod task_tree;
 
 use crate::output;
 use crate::ssh::SshClient;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tako_core::ServerRuntimeInfo;
 use tracing::Instrument;
 
+#[cfg(test)]
+use compatibility::remote_protocol_compatibility_command;
+use compatibility::{
+    check_remote_protocol_compatibility, remote_cleanup_upgrade_reload_command,
+    remote_prepare_upgrade_reload_command,
+};
+pub(super) use readiness::wait_for_primary_ready;
 use task_tree::{Step, UpgradeTaskTreeController, should_use_upgrade_task_tree};
 
 pub(super) const UPGRADE_SOCKET_WAIT_TIMEOUT: Duration = Duration::from_secs(120);
@@ -337,9 +345,9 @@ fn remote_binary_replace_command(url: &str, expected_sha256: &str) -> String {
          bin=$(find \"$tmp\" -type f -name tako-server | head -n 1); \
          if [ -z \"$bin\" ]; then echo 'error: archive did not contain tako-server binary' >&2; exit 1; fi; \
          {runtime_deps}; \
+         {podman_runtime}; \
          if [ -f {SERVER_BINARY_PATH} ]; then install -m 0755 {SERVER_BINARY_PATH} {SERVER_PREVIOUS_BINARY_PATH}; fi; \
          install -m 0755 \"$bin\" {SERVER_BINARY_PATH}; \
-         {podman_runtime}; \
          if command -v setcap >/dev/null 2>&1; then setcap {SERVER_FILE_CAPABILITIES} {SERVER_BINARY_PATH} 2>/dev/null || true; fi"
     );
     SshClient::run_with_root_or_sudo(&script)
@@ -362,9 +370,9 @@ fn remote_binary_replace_uploaded_archive_command(path: &str, expected_sha256: &
          bin=$(find \"$tmp\" -type f -name tako-server | head -n 1); \
          if [ -z \"$bin\" ]; then echo 'error: archive did not contain tako-server binary' >&2; exit 1; fi; \
          {runtime_deps}; \
+         {podman_runtime}; \
          if [ -f {SERVER_BINARY_PATH} ]; then install -m 0755 {SERVER_BINARY_PATH} {SERVER_PREVIOUS_BINARY_PATH}; fi; \
          install -m 0755 \"$bin\" {SERVER_BINARY_PATH}; \
-         {podman_runtime}; \
          if command -v setcap >/dev/null 2>&1; then setcap {SERVER_FILE_CAPABILITIES} {SERVER_BINARY_PATH} 2>/dev/null || true; fi"
     );
     run_with_root_or_sudo_without_env_for_tests(&script)
@@ -393,74 +401,10 @@ fn remote_cleanup_previous_binary_command() -> String {
     SshClient::run_with_root_or_sudo(&format!("rm -f {SERVER_PREVIOUS_BINARY_PATH}"))
 }
 
-pub(super) async fn wait_for_primary_ready(
-    ssh: &mut crate::ssh::SshClient,
-    timeout: Duration,
-    old_pid: u32,
-    server_name: &str,
-) -> Result<ServerRuntimeInfo, String> {
-    let start = std::time::Instant::now();
-    let mut last_err = String::new();
-    let mut last_seen_pid: Option<u32> = None;
-    let mut poll_count = 0u32;
-    while start.elapsed() < timeout {
-        ssh.clear_tako_hello_cache();
-        poll_count += 1;
-        match ssh.tako_server_info().await {
-            Ok(info) if info.pid != old_pid => {
-                tracing::debug!(
-                    server = server_name,
-                    new_pid = info.pid,
-                    old_pid,
-                    polls = poll_count,
-                    elapsed_ms = start.elapsed().as_millis() as u64,
-                    "new server process detected"
-                );
-                return Ok(info);
-            }
-            Ok(info) => {
-                last_seen_pid = Some(info.pid);
-                tracing::debug!(
-                    server = server_name,
-                    pid = info.pid,
-                    polls = poll_count,
-                    "still seeing old PID, waiting"
-                );
-                tokio::time::sleep(UPGRADE_POLL_INTERVAL).await;
-            }
-            Err(e) => {
-                last_err = e.to_string();
-                tracing::debug!(
-                    server = server_name,
-                    error = %e,
-                    polls = poll_count,
-                    "socket probe failed, waiting"
-                );
-                tokio::time::sleep(UPGRADE_POLL_INTERVAL).await;
-            }
-        }
-    }
-
-    let service_status = match ssh.tako_status().await {
-        Ok(s) => s,
-        Err(_) => "unknown".to_string(),
-    };
-
-    let detail = if !last_err.is_empty() {
-        format!("last socket error: {last_err}")
-    } else if let Some(pid) = last_seen_pid {
-        format!("socket still reports old pid {pid}")
-    } else {
-        "no response received".to_string()
-    };
-
-    Err(format!(
-        "timed out after {:.0}s waiting for new server process (old pid {old_pid}): {detail}; service status: {service_status}",
-        timeout.as_secs_f64(),
-    ))
-}
-
-pub(super) async fn upgrade_servers(name: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+pub(super) async fn upgrade_servers(
+    name: Option<&str>,
+    force: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     use crate::config::ServersToml;
 
     let servers = ServersToml::load()?;
@@ -509,7 +453,8 @@ pub(super) async fn upgrade_servers(name: Option<&str>) -> Result<(), Box<dyn st
         let span = output::scope(&name);
         handles.push(tokio::spawn(
             async move {
-                let result = upgrade_one_server(&name, &server, &latest, tree.as_ref()).await;
+                let result =
+                    upgrade_one_server(&name, &server, &latest, force, tree.as_ref()).await;
                 (name, result)
             }
             .instrument(span),
@@ -549,6 +494,7 @@ async fn upgrade_one_server(
     name: &str,
     server: &crate::config::ServerEntry,
     latest_version: &str,
+    force: bool,
     task_tree: Option<&UpgradeTaskTreeController>,
 ) -> Result<(), String> {
     if let Some(tree) = task_tree {
@@ -611,7 +557,8 @@ async fn upgrade_one_server(
         }
     };
 
-    let result = run_server_upgrade(name, &mut ssh, current_version.as_deref(), &target).await;
+    let result =
+        run_server_upgrade(name, &mut ssh, current_version.as_deref(), &target, force).await;
     let _ = ssh.disconnect().await;
 
     match result {
@@ -649,10 +596,13 @@ async fn run_server_upgrade(
     ssh: &mut SshClient,
     running_version: Option<&str>,
     target: &crate::config::ServerTarget,
+    force: bool,
 ) -> Result<Option<String>, String> {
     let owner = build_upgrade_owner(name);
     let mut upgrade_mode_entered = false;
     let mut binary_replaced = false;
+    let mut reload_handoff_data_dir = None;
+    let mut rollback_from_pid = None;
 
     let result: Result<Option<String>, String> = async {
         let status = ssh
@@ -666,6 +616,23 @@ async fn run_server_upgrade(
         let verified_release = resolve_verified_server_release_asset(target)
             .await
             .map_err(|e| format!("Failed to verify release metadata: {e}"))?;
+
+        let _t = output::timed("Enter upgrade mode");
+        ssh.tako_enter_upgrading_allow_incompatible(&owner, force)
+            .await
+            .map_err(|e| match &e {
+                crate::ssh::SshError::CommandFailed(m) => m.clone(),
+                other => other.to_string(),
+            })?;
+        drop(_t);
+        upgrade_mode_entered = true;
+
+        let old_info = ssh
+            .tako_server_info_allow_incompatible(force)
+            .await
+            .map_err(|e| format!("Failed to read runtime config: {e}"))?;
+        let old_pid = old_info.pid;
+        rollback_from_pid = Some(old_pid);
 
         let _t = output::timed("Download latest tako-server binary");
         let install_output = ssh
@@ -683,29 +650,37 @@ async fn run_server_upgrade(
                 first_non_empty_line(combined.trim()).unwrap_or("binary download/install failed");
             return Err(message.to_string());
         }
+        binary_replaced = true;
 
         let version_after_install = ssh.tako_version().await.ok().flatten();
         if version_after_install.as_deref() == running_version {
             tracing::debug!("Binary unchanged, skipping reload");
+            ssh.tako_exit_upgrading_allow_incompatible(&owner, force)
+                .await
+                .map_err(|error| format!("Failed to exit upgrading mode: {error}"))?;
+            upgrade_mode_entered = false;
+            if let Err(error) = ssh.exec(&remote_cleanup_previous_binary_command()).await {
+                tracing::warn!("Failed to remove previous tako-server binary: {error}");
+            }
             return Ok(version_after_install);
         }
-        binary_replaced = true;
 
-        let _t = output::timed("Enter upgrade mode");
-        ssh.tako_enter_upgrading(&owner)
-            .await
-            .map_err(|e| match &e {
-                crate::ssh::SshError::CommandFailed(m) => m.clone(),
-                other => other.to_string(),
-            })?;
-        drop(_t);
-        upgrade_mode_entered = true;
+        check_remote_protocol_compatibility(ssh, &old_info.data_dir, force).await?;
 
-        let old_info = ssh
-            .tako_server_info()
+        let handoff = ssh
+            .exec(&remote_prepare_upgrade_reload_command(
+                &old_info.data_dir,
+                &owner,
+            ))
             .await
-            .map_err(|e| format!("Failed to read runtime config: {e}"))?;
-        let old_pid = old_info.pid;
+            .map_err(|error| format!("Failed to prepare upgrade reload: {error}"))?;
+        if !handoff.success() {
+            return Err(format!(
+                "Failed to prepare upgrade reload: {}",
+                handoff.combined().trim()
+            ));
+        }
+        reload_handoff_data_dir = Some(old_info.data_dir.clone());
 
         let _t = output::timed(&format!(
             "Reload server (pid: {old_pid}) + wait for new process"
@@ -713,20 +688,16 @@ async fn run_server_upgrade(
         ssh.tako_reload()
             .await
             .map_err(|e| format!("Reload failed: {e}"))?;
-        let info = wait_for_primary_ready(ssh, UPGRADE_SOCKET_WAIT_TIMEOUT, old_pid, name).await?;
+        let info =
+            wait_for_primary_ready(ssh, UPGRADE_SOCKET_WAIT_TIMEOUT, old_pid, name, force).await?;
+        rollback_from_pid = Some(info.pid);
         tracing::debug!("New server process ready (pid: {})", info.pid);
 
-        match ssh.tako_exit_upgrading(&owner).await {
-            Ok(()) => {}
-            Err(e) => {
-                let msg = e.to_string();
-                if msg.contains("does not hold the upgrade lock") {
-                    tracing::debug!("Upgrade lock already cleared by new server process");
-                } else {
-                    return Err(format!("Failed to exit upgrading mode: {e}"));
-                }
-            }
-        }
+        check_remote_protocol_compatibility(ssh, &info.data_dir, force).await?;
+
+        ssh.tako_exit_upgrading_allow_incompatible(&owner, force)
+            .await
+            .map_err(|error| format!("Failed to exit upgrading mode: {error}"))?;
         upgrade_mode_entered = false;
 
         let version = ssh.tako_version().await.ok().flatten();
@@ -739,13 +710,54 @@ async fn run_server_upgrade(
     }
     .await;
 
+    let mut rollback_error = None;
+    if result.is_err() && binary_replaced {
+        match ssh.exec(&remote_restore_previous_binary_command()).await {
+            Ok(output) if output.success() => {
+                tracing::warn!("Restored previous tako-server binary after failed upgrade");
+                let reload_result = async {
+                    ssh.tako_restart()
+                        .await
+                        .map_err(|error| format!("restart previous binary: {error}"))?;
+                    if let Some(pid) = rollback_from_pid {
+                        wait_for_primary_ready(ssh, UPGRADE_SOCKET_WAIT_TIMEOUT, pid, name, force)
+                            .await
+                            .map(|_| ())
+                            .map_err(|error| format!("wait for previous binary: {error}"))?;
+                    }
+                    Ok::<(), String>(())
+                }
+                .await;
+                match reload_result {
+                    Ok(()) => upgrade_mode_entered = false,
+                    Err(error) => {
+                        tracing::warn!("Failed to restart previous tako-server binary: {error}");
+                        rollback_error = Some(error);
+                    }
+                }
+            }
+            Ok(output) => {
+                let error = format!("restore previous binary: {}", output.combined().trim());
+                tracing::warn!("Failed to restore previous tako-server binary: {error}");
+                rollback_error = Some(error);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to restore previous tako-server binary: {e}");
+                rollback_error = Some(format!("restore previous binary: {e}"));
+            }
+        }
+    }
+
     if result.is_err() && upgrade_mode_entered {
         tracing::debug!("Upgrade failed, attempting to release upgrade lock (owner: {owner})");
         for attempt in 0..5 {
             if attempt > 0 {
                 tokio::time::sleep(Duration::from_secs(2)).await;
             }
-            match ssh.tako_exit_upgrading(&owner).await {
+            match ssh
+                .tako_exit_upgrading_allow_incompatible(&owner, force)
+                .await
+            {
                 Ok(()) => {
                     tracing::debug!("Upgrade lock released (attempt {attempt})");
                     break;
@@ -759,24 +771,26 @@ async fn run_server_upgrade(
         }
     }
 
-    if result.is_err() && binary_replaced {
-        match ssh.exec(&remote_restore_previous_binary_command()).await {
-            Ok(output) if output.success() => {
-                tracing::warn!("Restored previous tako-server binary after failed upgrade");
-            }
-            Ok(output) => {
-                tracing::warn!(
-                    "Failed to restore previous tako-server binary: {}",
-                    output.combined().trim()
-                );
-            }
-            Err(e) => {
-                tracing::warn!("Failed to restore previous tako-server binary: {e}");
-            }
+    if let Some(data_dir) = reload_handoff_data_dir {
+        match ssh
+            .exec(&remote_cleanup_upgrade_reload_command(&data_dir))
+            .await
+        {
+            Ok(output) if output.success() => {}
+            Ok(output) => tracing::warn!(
+                "Failed to remove upgrade reload marker: {}",
+                output.combined().trim()
+            ),
+            Err(error) => tracing::warn!("Failed to remove upgrade reload marker: {error}"),
         }
     }
 
-    result
+    match (result, rollback_error) {
+        (Err(error), Some(rollback_error)) => {
+            Err(format!("{error}; rollback failed: {rollback_error}"))
+        }
+        (result, _) => result,
+    }
 }
 
 #[cfg(test)]

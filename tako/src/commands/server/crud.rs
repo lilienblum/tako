@@ -248,6 +248,7 @@ pub(super) async fn restart_server(
                     super::upgrade::UPGRADE_SOCKET_WAIT_TIMEOUT,
                     old_pid,
                     name,
+                    false,
                 )
                 .await
                 {

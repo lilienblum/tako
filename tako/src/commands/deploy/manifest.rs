@@ -6,6 +6,7 @@ use crate::config::{EncryptedSecretValue, SecretsStore, TakoToml};
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub(super) struct DeployArchiveManifest {
+    pub(super) protocol_version: u32,
     #[serde(default, skip_serializing_if = "DeployReleaseKind::is_native")]
     pub(super) release_kind: DeployReleaseKind,
     pub(super) app_name: String,
@@ -219,6 +220,7 @@ pub(super) fn build_deploy_archive_manifest(
     env_vars.insert("TAKO_BUILD".to_string(), version.to_string());
 
     DeployArchiveManifest {
+        protocol_version: tako_core::PROTOCOL_VERSION,
         release_kind: DeployReleaseKind::Native,
         app_name: app_name.to_string(),
         environment: environment.to_string(),
@@ -268,6 +270,7 @@ pub(super) fn build_container_deploy_archive_manifest(
     env_vars.insert("TAKO_BUILD".to_string(), version.to_string());
 
     DeployArchiveManifest {
+        protocol_version: tako_core::PROTOCOL_VERSION,
         release_kind: DeployReleaseKind::Container,
         app_name: app_name.to_string(),
         environment: environment.to_string(),
@@ -380,6 +383,7 @@ mod tests {
             String::new(),
             String::new(),
         );
+        assert_eq!(manifest.protocol_version, tako_core::PROTOCOL_VERSION);
         assert_eq!(manifest.idle_timeout, 300);
         assert_eq!(
             manifest.env_vars.get("TAKO_BUILD"),

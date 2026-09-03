@@ -85,6 +85,16 @@ fn deploy_parses_yes_short_flag() {
 }
 
 #[test]
+fn deploy_parses_force_flag_separately_from_yes() {
+    let cli = Cli::try_parse_from(["tako", "deploy", "--force"]).unwrap();
+    let Some(Commands::Deploy { force, yes, .. }) = cli.command else {
+        panic!("expected Deploy");
+    };
+    assert!(force);
+    assert!(!yes);
+}
+
+#[test]
 fn releases_list_parses() {
     let cli = Cli::try_parse_from(["tako", "releases", "list"]).unwrap();
     let Some(Commands::Releases(releases::ReleaseCommands::List { env })) = cli.command else {

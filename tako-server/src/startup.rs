@@ -1,4 +1,4 @@
-use crate::boot::{read_server_config, sd_notify_ready};
+use crate::boot::{read_server_config, sd_notify_ready, should_signal_parent_on_ready};
 use crate::identity::load_or_create_server_identity;
 use crate::metrics;
 use crate::proxy::{self, ProxyConfig};
@@ -159,13 +159,30 @@ pub(crate) fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let challenge_tokens_for_promote = challenge_tokens.clone();
-    let state = Arc::new(ServerState::new_with_runtime(
-        data_dir.clone(),
-        cert_manager.clone(),
-        acme_client.clone(),
-        challenge_tokens,
-        runtime,
-    )?);
+    let reload_owner = take_upgrade_reload_owner(&data_dir)?;
+    let reload_owner = if should_signal_parent_on_ready() {
+        reload_owner.as_deref()
+    } else {
+        None
+    };
+    let state = Arc::new(if let Some(reload_owner) = reload_owner {
+        ServerState::new_with_runtime_for_reload(
+            data_dir.clone(),
+            cert_manager.clone(),
+            acme_client.clone(),
+            challenge_tokens,
+            runtime,
+            reload_owner,
+        )?
+    } else {
+        ServerState::new_with_runtime(
+            data_dir.clone(),
+            cert_manager.clone(),
+            acme_client.clone(),
+            challenge_tokens,
+            runtime,
+        )?
+    });
     rt.block_on(async { state.ensure_internal_socket_started() })?;
 
     if let Err(e) = rt.block_on(state.restore_from_state_store()) {
@@ -279,6 +296,22 @@ pub(crate) fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     });
 
     Ok(())
+}
+
+fn take_upgrade_reload_owner(data_dir: &std::path::Path) -> std::io::Result<Option<String>> {
+    let marker_path = data_dir.join(tako_core::UPGRADE_RELOAD_MARKER_FILE);
+    let owner = match std::fs::read_to_string(&marker_path) {
+        Ok(owner) => owner,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    std::fs::remove_file(marker_path)?;
+    let owner = owner.trim();
+    if owner.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(owner.to_string()))
+    }
 }
 
 #[cfg(all(test, unix))]

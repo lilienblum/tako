@@ -16,6 +16,7 @@ pub(super) async fn run_server_preflight_checks(
     servers: ServersToml,
     deploy_app_name: String,
     routes: Vec<String>,
+    force: bool,
     task_tree: Option<DeployTaskTreeController>,
 ) -> Result<PreflightPhaseResult, String> {
     let start = Instant::now();
@@ -45,6 +46,21 @@ pub(super) async fn run_server_preflight_checks(
 
                     let mut client =
                         map_preflight_management_result(&host, ManagementClient::new(&host).await)?;
+                    if !force {
+                        let hello = map_preflight_management_result(
+                            &host,
+                            client
+                                .send(&Command::Hello {
+                                    protocol_version: tako_core::PROTOCOL_VERSION,
+                                })
+                                .await,
+                        )?;
+                        if let Some(message) = hello.error_message() {
+                            return Err(management_http::ManagementError::Message(
+                                message.to_string(),
+                            ));
+                        }
+                    }
                     let info = map_preflight_management_result(
                         &host,
                         client.send(&Command::ServerInfo).await,

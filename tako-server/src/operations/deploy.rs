@@ -24,6 +24,7 @@ pub(crate) struct DeployRequest<'a> {
     pub(crate) storages: Option<HashMap<String, tako_core::StorageBinding>>,
     pub(crate) ssl: tako_core::SslBinding,
     pub(crate) backup: Option<tako_core::BackupBinding>,
+    pub(crate) force: bool,
 }
 
 struct RollbackSnapshot {
@@ -48,6 +49,7 @@ impl crate::ServerState {
             storages,
             ssl,
             backup,
+            force,
         } = request;
 
         tracing::info!(app = app_name, version = version, "Deploying app");
@@ -66,6 +68,11 @@ impl crate::ServerState {
                 Ok(value) => value,
                 Err(msg) => return Response::error(msg),
             };
+        if let Err(error) =
+            crate::protocol_compatibility::validate_release_protocol(&release_path, force)
+        {
+            return Response::error(error);
+        }
         let ssl = match self
             .resolve_deploy_ssl_binding(app_name, &release_path, &routes, ssl)
             .await

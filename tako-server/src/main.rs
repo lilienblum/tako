@@ -22,6 +22,7 @@ mod metrics;
 mod object_storage;
 mod operations;
 mod paths;
+mod protocol_compatibility;
 mod proxy;
 mod release;
 mod release_command;
@@ -264,6 +265,18 @@ pub struct Args {
     /// Run the isolated image transform worker protocol on stdin/stdout.
     #[arg(long, hide = true)]
     pub image_worker: bool,
+
+    /// Validate active app releases against this server's protocol and exit.
+    #[arg(long, hide = true)]
+    pub check_protocol_compatibility: bool,
+
+    /// Protocol version expected by the invoking Tako CLI.
+    #[arg(long, hide = true)]
+    pub expected_protocol_version: Option<u32>,
+
+    /// Allow the compatibility check to continue after a protocol mismatch.
+    #[arg(long, hide = true)]
+    pub allow_incompatible_protocol: bool,
 }
 
 fn run_extract_archive_mode(args: &Args) -> Result<(), String> {
@@ -276,6 +289,24 @@ fn run_extract_archive_mode(args: &Args) -> Result<(), String> {
         .as_deref()
         .ok_or_else(|| "Extraction mode requires --extract-dest <dir>".to_string())?;
     extract_zstd_archive(Path::new(archive), Path::new(dest))
+}
+
+fn run_protocol_compatibility_mode(args: &Args) -> Result<(), String> {
+    let data_dir = args
+        .data_dir
+        .as_deref()
+        .ok_or_else(|| "Protocol compatibility mode requires --data-dir <path>".to_string())?;
+    let expected_protocol_version = args.expected_protocol_version.ok_or_else(|| {
+        "Protocol compatibility mode requires --expected-protocol-version <version>".to_string()
+    })?;
+    protocol_compatibility::validate_expected_server_protocol(
+        expected_protocol_version,
+        args.allow_incompatible_protocol,
+    )?;
+    protocol_compatibility::validate_active_release_protocols(
+        Path::new(data_dir),
+        args.allow_incompatible_protocol,
+    )
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -323,6 +354,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if args.extract_zstd_archive.is_some() || args.extract_dest.is_some() {
         run_extract_archive_mode(&args)?;
+        return Ok(());
+    }
+    if args.check_protocol_compatibility {
+        run_protocol_compatibility_mode(&args)?;
         return Ok(());
     }
     startup::run(args)

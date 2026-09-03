@@ -359,7 +359,7 @@ pub fn write_bun_app(app_dir: &Path, body: &str) {
     .unwrap();
     fs::write(
         app_dir.join("app.json"),
-        r#"{"runtime":"bun","main":"src/index.ts","idle_timeout":300,"install":"true","start":["bun","{main}"]}"#,
+        r#"{"protocol_version":0,"runtime":"bun","main":"src/index.ts","idle_timeout":300,"install":"true","start":["bun","{main}"]}"#,
     )
     .unwrap();
     fs::write(app_dir.join("src/index.ts"), bun_app_source(body)).unwrap();
@@ -381,7 +381,7 @@ pub fn write_second_instance_flapping_bun_app(app_dir: &Path, body: &str, marker
     .unwrap();
     fs::write(
         app_dir.join("app.json"),
-        r#"{"runtime":"bun","main":"src/index.ts","idle_timeout":300,"install":"true","start":["bun","{main}"]}"#,
+        r#"{"protocol_version":0,"runtime":"bun","main":"src/index.ts","idle_timeout":300,"install":"true","start":["bun","{main}"]}"#,
     )
     .unwrap();
     fs::write(

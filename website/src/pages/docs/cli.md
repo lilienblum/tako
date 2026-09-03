@@ -142,10 +142,10 @@ The interactive status panel always shows local routes plus LAN and tunnel state
 ## Deploy And Runtime Operations
 
 ```bash
-tako deploy [--env <env>] [-y|--yes]
+tako deploy [--env <env>] [-y|--yes] [--force]
 ```
 
-Builds locally, uploads artifacts over signed HTTP management, prepares every mapped server, runs the optional release command on the leader, rolls instances, finalizes the release, and runs post-deploy backups when enabled. `--env` defaults to `production`. `development` is reserved for `tako dev`.
+Builds locally, uploads artifacts over signed HTTP management, prepares every mapped server, runs the optional release command on the leader, rolls instances, finalizes the release, and runs post-deploy backups when enabled. `--env` defaults to `production`. `development` is reserved for `tako dev`. Deploy requires the CLI, server, and release artifact to use the same protocol version; a mismatch fails before release commands, workflows, or app processes start. `--force` attempts the deploy despite a mismatch but does not skip normal validation or readiness checks. It is separate from `--yes`, which only skips confirmation.
 
 ```bash
 tako logs [--env <env>] [--tail] [--days N]
@@ -187,7 +187,7 @@ tako servers list
 tako servers ls
 tako status
 tako servers reload <name> [--force]
-tako servers upgrade [name]
+tako servers upgrade [name] [--force]
 tako servers remove [name]
 tako servers rm [name]
 tako servers uninstall [name] [-y|--yes]
@@ -197,7 +197,7 @@ tako servers uninstall [name] [-y|--yes]
 
 `status` prints a deployment snapshot grouped by server, with compact server summary, routes, and app rows.
 
-`servers reload` performs a zero-downtime service reload by default. `--force` performs a full restart. `servers upgrade` installs a new server binary and reloads with rollback to the previous binary if readiness fails. When the running server predates the current SQLite storage engine, upgrade restarts the service instead of reloading (brief downtime, one time) because the two engines cannot share the state databases during the overlap. `servers uninstall` removes the remote service, binaries, data, sockets, and local server entry.
+`servers reload` performs a zero-downtime service reload by default. Its `--force` flag performs a full restart. `servers upgrade` checks the candidate protocol against the CLI and every active app before reload, checks again after readiness, and restores and restarts the previous binary if the upgrade fails. `servers upgrade --force` attempts an incompatible upgrade but keeps readiness and rollback checks enabled. `servers uninstall` removes the remote service, binaries, data, sockets, and local server entry.
 
 ## Secrets
 
@@ -260,4 +260,3 @@ tako version
 ```
 
 `completions` installs bash, zsh, and fish completion scripts for shells that are on `PATH`. zsh is installed only when a writable directory is already on `fpath`; otherwise Tako prints how to add one. `upgrade` updates the local CLI install. On macOS, official CLI upgrades support Apple Silicon only. `uninstall` removes local Tako binaries, local data, completion scripts, and platform-specific dev services/config after confirmation.
-

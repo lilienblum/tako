@@ -16,6 +16,7 @@ impl crate::ServerState {
         path: &str,
         routes: Vec<String>,
         ssl: tako_core::SslBinding,
+        force: bool,
     ) -> Response {
         if let Err(msg) = validate_deploy_routes(&routes) {
             return Response::error(msg);
@@ -25,6 +26,11 @@ impl crate::ServerState {
                 Ok(value) => value,
                 Err(msg) => return Response::error(msg),
             };
+        if let Err(error) =
+            crate::protocol_compatibility::validate_release_protocol(&release_path, force)
+        {
+            return Response::error(error);
+        }
 
         if let Err(error) = self.validate_deploy_ssl_binding(&routes, &ssl).await {
             return Response::error(format!("Cloudflare credential check failed: {error}"));
@@ -52,12 +58,22 @@ impl crate::ServerState {
         Response::ok(serde_json::json!({ "status": "cleaned" }))
     }
 
-    pub(crate) async fn prepare_release(&self, app_name: &str, path: &str) -> Response {
+    pub(crate) async fn prepare_release(
+        &self,
+        app_name: &str,
+        path: &str,
+        force: bool,
+    ) -> Response {
         let release_path =
             match validate_release_path_for_app(&self.runtime.data_dir, app_name, path) {
                 Ok(value) => value,
                 Err(msg) => return Response::error(msg),
             };
+        if let Err(error) =
+            crate::protocol_compatibility::validate_release_protocol(&release_path, force)
+        {
+            return Response::error(error);
+        }
 
         let env_vars = match env_vars_from_release_dir(&release_path) {
             Ok(vars) => vars,
@@ -106,6 +122,7 @@ impl crate::ServerState {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn run_release(
         &self,
         app_name: &str,
@@ -114,6 +131,7 @@ impl crate::ServerState {
         command_line: &str,
         vars: HashMap<String, String>,
         secrets: HashMap<String, String>,
+        force: bool,
     ) -> Response {
         use crate::release_command;
 
@@ -125,6 +143,11 @@ impl crate::ServerState {
                 Ok(value) => value,
                 Err(msg) => return Response::error(msg),
             };
+        if let Err(error) =
+            crate::protocol_compatibility::validate_release_protocol(&release_path, force)
+        {
+            return Response::error(error);
+        }
 
         // Acquire the per-app deploy lock so the release command runs inside
         // the same logical deploy transaction. A concurrent deploy or release
@@ -318,6 +341,7 @@ impl crate::ServerState {
             storages: None,
             ssl,
             backup: None,
+            force: false,
         })
         .await
     }

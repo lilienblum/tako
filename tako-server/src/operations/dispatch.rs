@@ -33,11 +33,11 @@ impl crate::ServerState {
 
                 Response::ok(data)
             }
-            Command::PrepareRelease { app, path } => {
+            Command::PrepareRelease { app, path, force } => {
                 if let Err(msg) = validate_app_name(&app) {
                     return Response::error(msg);
                 }
-                self.prepare_release(&app, &path).await
+                self.prepare_release(&app, &path, force).await
             }
             Command::PrepareReleaseUpload { app, version } => {
                 if let Err(msg) = validate_app_name(&app) {
@@ -58,6 +58,7 @@ impl crate::ServerState {
                 path,
                 routes,
                 ssl,
+                force,
             } => {
                 if let Err(msg) = validate_app_name(&app) {
                     return Response::error(msg);
@@ -68,7 +69,8 @@ impl crate::ServerState {
                 if let Some(resp) = self.reject_mutating_when_upgrading("prepare-deploy").await {
                     return resp;
                 }
-                self.prepare_deploy(&app, &version, &path, routes, ssl).await
+                self.prepare_deploy(&app, &version, &path, routes, ssl, force)
+                    .await
             }
             Command::CleanupPreparedDeploy { app, version } => {
                 if let Err(msg) = validate_app_name(&app) {
@@ -110,6 +112,7 @@ impl crate::ServerState {
                 command_line,
                 vars,
                 secrets,
+                force,
             } => {
                 if let Err(msg) = validate_app_name(&app) {
                     return Response::error(msg);
@@ -117,7 +120,7 @@ impl crate::ServerState {
                 if let Err(msg) = validate_release_version(&version) {
                     return Response::error(msg);
                 }
-                self.run_release(&app, &version, &path, &command_line, vars, secrets)
+                self.run_release(&app, &version, &path, &command_line, vars, secrets, force)
                     .await
             }
             Command::Deploy {
@@ -131,6 +134,7 @@ impl crate::ServerState {
                 storages,
                 ssl,
                 backup,
+                force,
             } => {
                 if let Err(msg) = validate_app_name(&app) {
                     return Response::error(msg);
@@ -152,6 +156,7 @@ impl crate::ServerState {
                     storages,
                     ssl,
                     backup: backup.map(|backup| *backup),
+                    force,
                 })
                 .await
             }

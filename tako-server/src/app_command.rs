@@ -34,6 +34,7 @@ pub(crate) fn safe_subdir(base: &Path, subpath: &str) -> Result<PathBuf, String>
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub(crate) struct ReleaseManifest {
+    pub protocol_version: u32,
     #[serde(default)]
     pub release_kind: ReleaseKind,
     #[serde(default)]
@@ -267,7 +268,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(
             dir.path().join("app.json"),
-            r#"{"runtime":"bun","main":"index.ts","idle_timeout":300,"env_vars":{"NODE_ENV":"production","TAKO_BUILD":"v1"}}"#,
+            r#"{"protocol_version":0,"runtime":"bun","main":"index.ts","idle_timeout":300,"env_vars":{"NODE_ENV":"production","TAKO_BUILD":"v1"}}"#,
         )
         .unwrap();
         let vars = env_vars_from_release_dir(dir.path()).unwrap();
@@ -280,7 +281,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(
             dir.path().join("app.json"),
-            r#"{"runtime":"bun","main":"index.ts","idle_timeout":300}"#,
+            r#"{"protocol_version":0,"runtime":"bun","main":"index.ts","idle_timeout":300}"#,
         )
         .unwrap();
         let vars = env_vars_from_release_dir(dir.path()).unwrap();
@@ -307,7 +308,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(
             dir.path().join("app.json"),
-            r#"{"runtime":"bun","main":"index.ts","idle_timeout":42}"#,
+            r#"{"protocol_version":0,"runtime":"bun","main":"index.ts","idle_timeout":42}"#,
         )
         .unwrap();
         assert_eq!(idle_timeout_secs_from_release_dir(dir.path()).unwrap(), 42);
@@ -318,7 +319,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(
             dir.path().join("app.json"),
-            r#"{"runtime":"bun","main":"server/entry.js","idle_timeout":300}"#,
+            r#"{"protocol_version":0,"runtime":"bun","main":"server/entry.js","idle_timeout":300}"#,
         )
         .unwrap();
 
@@ -334,7 +335,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(
             dir.path().join("app.json"),
-            r#"{"runtime":"bun","main":"server/entry.js","start":["./app","--serve"],"idle_timeout":300}"#,
+            r#"{"protocol_version":0,"runtime":"bun","main":"server/entry.js","start":["./app","--serve"],"idle_timeout":300}"#,
         )
         .unwrap();
 
@@ -347,7 +348,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(
             dir.path().join("app.json"),
-            r#"{"runtime":"bun","main":"server/entry.js","start":[],"idle_timeout":300}"#,
+            r#"{"protocol_version":0,"runtime":"bun","main":"server/entry.js","start":[],"idle_timeout":300}"#,
         )
         .unwrap();
 
@@ -362,7 +363,7 @@ mod tests {
         std::fs::write(dir.path().join("src/index.ts"), "export default {};\n").unwrap();
         std::fs::write(
             dir.path().join("app.json"),
-            r#"{"runtime":"bun","main":"src/index.ts","start":["bun","{main}"],"idle_timeout":300}"#,
+            r#"{"protocol_version":0,"runtime":"bun","main":"src/index.ts","start":["bun","{main}"],"idle_timeout":300}"#,
         )
         .unwrap();
 
@@ -389,7 +390,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(
             dir.path().join("app.json"),
-            r#"{"runtime":"python","main":"server/index.js","idle_timeout":300}"#,
+            r#"{"protocol_version":0,"runtime":"python","main":"server/index.js","idle_timeout":300}"#,
         )
         .unwrap();
         let err = command_for_release_dir(dir.path()).unwrap_err();
@@ -401,7 +402,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(
             dir.path().join("app.json"),
-            r#"{"runtime":"node","main":"server/index.mjs","idle_timeout":300}"#,
+            r#"{"protocol_version":0,"runtime":"node","main":"server/index.mjs","idle_timeout":300}"#,
         )
         .unwrap();
 
@@ -419,7 +420,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(
             dir.path().join("app.json"),
-            r#"{"runtime":"bun","main":"  ","idle_timeout":300}"#,
+            r#"{"protocol_version":0,"runtime":"bun","main":"  ","idle_timeout":300}"#,
         )
         .unwrap();
 
@@ -434,7 +435,7 @@ mod tests {
         std::fs::write(dir.path().join("src/app.ts"), "export default {};\n").unwrap();
         std::fs::write(
             dir.path().join("app.json"),
-            r#"{"runtime":"bun","main":"src/app.ts","idle_timeout":300}"#,
+            r#"{"protocol_version":0,"runtime":"bun","main":"src/app.ts","idle_timeout":300}"#,
         )
         .unwrap();
 
@@ -450,7 +451,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(
             dir.path().join("app.json"),
-            r#"{"runtime":"bun","main":"@tanstack/react-start/server-entry","idle_timeout":300}"#,
+            r#"{"protocol_version":0,"runtime":"bun","main":"@tanstack/react-start/server-entry","idle_timeout":300}"#,
         )
         .unwrap();
 
@@ -463,7 +464,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(
             dir.path().join("app.json"),
-            r#"{"runtime":"bun","main":"index.ts","idle_timeout":300,"runtime_version":"1.2.0"}"#,
+            r#"{"protocol_version":0,"runtime":"bun","main":"index.ts","idle_timeout":300,"runtime_version":"1.2.0"}"#,
         )
         .unwrap();
 
@@ -476,13 +477,41 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(
             dir.path().join("app.json"),
-            r#"{"runtime":"bun","main":"index.ts","idle_timeout":300}"#,
+            r#"{"protocol_version":0,"runtime":"bun","main":"index.ts","idle_timeout":300}"#,
         )
         .unwrap();
 
         let manifest = load_release_manifest(dir.path()).unwrap();
         assert!(manifest.runtime_version.is_none());
+        assert_eq!(manifest.protocol_version, 0);
         assert_eq!(manifest.release_kind, ReleaseKind::Native);
+    }
+
+    #[test]
+    fn protocol_version_deserialized_from_manifest() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("app.json"),
+            r#"{"protocol_version":7,"runtime":"bun","main":"index.ts","idle_timeout":300}"#,
+        )
+        .unwrap();
+
+        let manifest = load_release_manifest(dir.path()).unwrap();
+        assert_eq!(manifest.protocol_version, 7);
+    }
+
+    #[test]
+    fn protocol_version_is_required_in_manifest() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("app.json"),
+            r#"{"runtime":"bun","main":"index.ts","idle_timeout":300}"#,
+        )
+        .unwrap();
+
+        let error = load_release_manifest(dir.path()).unwrap_err();
+
+        assert!(error.contains("protocol_version"), "got: {error}");
     }
 
     #[test]
@@ -490,7 +519,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(
             dir.path().join("app.json"),
-            r#"{"release_kind":"container","app_name":"my-app","environment":"production","version":"v1","runtime":"container","main":"","idle_timeout":300,"container_file":"Dockerfile","container_port":3000}"#,
+            r#"{"protocol_version":0,"release_kind":"container","app_name":"my-app","environment":"production","version":"v1","runtime":"container","main":"","idle_timeout":300,"container_file":"Dockerfile","container_port":3000}"#,
         )
         .unwrap();
 
@@ -506,7 +535,7 @@ mod tests {
     #[test]
     fn container_release_manifest_deserializes_workflow_run() {
         let manifest: ReleaseManifest = serde_json::from_str(
-            r#"{"release_kind":"container","app_name":"my-app","environment":"production","version":"v1","runtime":"container","main":"","workflow_run":["./worker","video"],"idle_timeout":300,"container_file":"Dockerfile","container_port":3000}"#,
+            r#"{"protocol_version":0,"release_kind":"container","app_name":"my-app","environment":"production","version":"v1","runtime":"container","main":"","workflow_run":["./worker","video"],"idle_timeout":300,"container_file":"Dockerfile","container_port":3000}"#,
         )
         .unwrap();
 
@@ -521,7 +550,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(
             dir.path().join("app.json"),
-            r#"{"release_kind":"container","runtime":"container","main":"","idle_timeout":300,"container_file":"Dockerfile"}"#,
+            r#"{"protocol_version":0,"release_kind":"container","runtime":"container","main":"","idle_timeout":300,"container_file":"Dockerfile"}"#,
         )
         .unwrap();
 
@@ -534,7 +563,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(
             dir.path().join("app.json"),
-            r#"{"runtime":"node","main":"index.ts","idle_timeout":300,"package_manager":"bun","package_manager_version":"1.3.11"}"#,
+            r#"{"protocol_version":0,"runtime":"node","main":"index.ts","idle_timeout":300,"package_manager":"bun","package_manager_version":"1.3.11"}"#,
         )
         .unwrap();
 
@@ -550,7 +579,7 @@ mod tests {
         std::fs::write(dir.path().join("app"), "").unwrap();
         std::fs::write(
             dir.path().join("app.json"),
-            r#"{"runtime":"go","main":"app","idle_timeout":300}"#,
+            r#"{"protocol_version":0,"runtime":"go","main":"app","idle_timeout":300}"#,
         )
         .unwrap();
 
@@ -569,7 +598,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(
             dir.path().join("app.json"),
-            r#"{"runtime":"go","main":"my-server","idle_timeout":300}"#,
+            r#"{"protocol_version":0,"runtime":"go","main":"my-server","idle_timeout":300}"#,
         )
         .unwrap();
 

@@ -130,6 +130,42 @@ impl ServerState {
         challenge_tokens: ChallengeTokens,
         runtime: ServerRuntimeConfig,
     ) -> Result<Self, StateStoreError> {
+        Self::new_with_runtime_upgrade_policy(
+            data_dir,
+            cert_manager,
+            acme_client,
+            challenge_tokens,
+            runtime,
+            None,
+        )
+    }
+
+    pub(crate) fn new_with_runtime_for_reload(
+        data_dir: PathBuf,
+        cert_manager: Arc<CertManager>,
+        acme_client: Option<Arc<AcmeClient>>,
+        challenge_tokens: ChallengeTokens,
+        runtime: ServerRuntimeConfig,
+        upgrade_owner: &str,
+    ) -> Result<Self, StateStoreError> {
+        Self::new_with_runtime_upgrade_policy(
+            data_dir,
+            cert_manager,
+            acme_client,
+            challenge_tokens,
+            runtime,
+            Some(upgrade_owner),
+        )
+    }
+
+    fn new_with_runtime_upgrade_policy(
+        data_dir: PathBuf,
+        cert_manager: Arc<CertManager>,
+        acme_client: Option<Arc<AcmeClient>>,
+        challenge_tokens: ChallengeTokens,
+        runtime: ServerRuntimeConfig,
+        expected_upgrade_owner: Option<&str>,
+    ) -> Result<Self, StateStoreError> {
         let app_manager = Arc::new(AppManager::new(data_dir.clone()));
         let load_balancer = Arc::new(LoadBalancer::new(app_manager.clone()));
         let device_key = load_or_create_device_key(&data_dir.join("secret.key"))?;
@@ -138,14 +174,35 @@ impl ServerState {
             device_key,
         ));
         state_store.init()?;
-        let server_mode = state_store.server_mode()?;
-        if server_mode == UpgradeMode::Upgrading {
-            state_store.set_server_mode(UpgradeMode::Normal)?;
-            if let Some(owner) = state_store.upgrade_lock_owner()? {
+        let persisted_mode = state_store.server_mode()?;
+        let persisted_owner = state_store.upgrade_lock_owner()?;
+        let preserve_upgrade_mode = match expected_upgrade_owner {
+            Some(expected)
+                if persisted_mode == UpgradeMode::Upgrading
+                    && persisted_owner.as_deref() == Some(expected) =>
+            {
+                true
+            }
+            Some(expected) => {
+                return Err(StateStoreError::InvalidData(format!(
+                    "upgrade reload owner '{expected}' does not match the active upgrade lock"
+                )));
+            }
+            None => false,
+        };
+        if !preserve_upgrade_mode {
+            if persisted_mode != UpgradeMode::Normal {
+                state_store.set_server_mode(UpgradeMode::Normal)?;
+            }
+            if let Some(owner) = persisted_owner {
                 let _ = state_store.release_upgrade_lock(&owner);
             }
         }
-        let server_mode = UpgradeMode::Normal;
+        let server_mode = if preserve_upgrade_mode {
+            UpgradeMode::Upgrading
+        } else {
+            UpgradeMode::Normal
+        };
 
         let workflows = Arc::new(crate::workflows::WorkflowManager::new(data_dir.clone()));
         {

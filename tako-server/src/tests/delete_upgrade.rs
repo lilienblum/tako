@@ -172,6 +172,41 @@ async fn server_mode_resets_upgrading_on_boot() {
 }
 
 #[tokio::test]
+async fn controlled_reload_preserves_upgrading_mode_and_owner() {
+    let temp = TempDir::new().unwrap();
+    let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
+        cert_dir: temp.path().join("certs"),
+        ..Default::default()
+    }));
+    let data_dir = temp.path().to_path_buf();
+    let state_a = ServerState::new(
+        data_dir.clone(),
+        cert_manager.clone(),
+        None,
+        empty_challenge_tokens(),
+    )
+    .unwrap();
+    assert!(state_a.try_enter_upgrading("controller-a").await.unwrap());
+    drop(state_a);
+
+    let state_b = ServerState::new_with_runtime_for_reload(
+        data_dir.clone(),
+        cert_manager,
+        None,
+        empty_challenge_tokens(),
+        ServerRuntimeConfig::for_defaults(data_dir),
+        "controller-a",
+    )
+    .unwrap();
+
+    assert_eq!(*state_b.server_mode.read().await, UpgradeMode::Upgrading);
+    assert_eq!(
+        state_b.state_store.upgrade_lock_owner().unwrap().as_deref(),
+        Some("controller-a")
+    );
+}
+
+#[tokio::test]
 async fn upgrading_lock_allows_single_owner() {
     let temp = TempDir::new().unwrap();
     let cert_manager = Arc::new(CertManager::new(CertManagerConfig {

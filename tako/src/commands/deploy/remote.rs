@@ -192,6 +192,7 @@ async fn prepare_deploy_metadata(
             path: release_dir.to_string(),
             routes: config.routes.clone(),
             ssl: config.ssl.clone(),
+            force: config.force,
         })
         .await?;
     release_response_result(response).map_err(management_http::ManagementError::Message)?;
@@ -264,6 +265,7 @@ async fn prepare_release(
         .send(&Command::PrepareRelease {
             app: config.app_name.clone(),
             path: release_dir.to_string(),
+            force: config.force,
         })
         .await?;
     release_response_result(response).map_err(management_http::ManagementError::Message)?;
@@ -409,6 +411,7 @@ async fn send_deploy_command(
             storages: Some(config.storages.clone()),
             ssl: ssl_binding_for_start_command(&config.ssl),
             backup: config.backup.clone().map(Box::new),
+            force: config.force,
         })
         .await?;
     release_response_result(response).map_err(management_http::ManagementError::Message)?;

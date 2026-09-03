@@ -50,7 +50,7 @@ fn test_deploy_and_list() {
     .unwrap();
     fs::write(
             app_dir.join("app.json"),
-            r#"{"runtime":"bun","main":"index.ts","idle_timeout":300,"install":"true","start":["bun","{main}"]}"#,
+            r#"{"protocol_version":0,"runtime":"bun","main":"index.ts","idle_timeout":300,"install":"true","start":["bun","{main}"]}"#,
         )
         .unwrap();
     fs::write(

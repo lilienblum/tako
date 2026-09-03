@@ -62,6 +62,7 @@ struct DeployConfig {
     storages: HashMap<String, tako_core::StorageBinding>,
     ssl: tako_core::SslBinding,
     backup: Option<tako_core::BackupBinding>,
+    force: bool,
     /// SHA-256 hash of the decrypted secrets for this deploy.
     secrets_hash: String,
     main: String,
@@ -144,6 +145,7 @@ impl DeployConfig {
             command_line: command_line.clone(),
             vars: HashMap::new(),
             secrets: self.secrets.clone(),
+            force: self.force,
         })
     }
 }
@@ -151,16 +153,18 @@ impl DeployConfig {
 pub fn run(
     env: Option<&str>,
     assume_yes: bool,
+    force: bool,
     config_path: Option<&Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Use tokio runtime for async SSH operations
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(run_async(env, assume_yes, config_path))
+    rt.block_on(run_async(env, assume_yes, force, config_path))
 }
 
 async fn run_async(
     requested_env: Option<&str>,
     assume_yes: bool,
+    force: bool,
     config_path: Option<&Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let context = project_context::resolve_existing(config_path)?;
@@ -385,6 +389,7 @@ async fn run_async(
         servers.clone(),
         preflight_deploy_app_name,
         routes.clone(),
+        force,
         deploy_task_tree.clone(),
     ));
     let mut build_handle = tokio::spawn(prepare_build_phase(
@@ -500,6 +505,7 @@ async fn run_async(
         storages: deploy_storages,
         ssl: deploy_ssl,
         backup: deploy_backup,
+        force,
         secrets_hash,
         main: manifest_main,
         use_unified_target_process: use_unified_js_target_process,

@@ -480,6 +480,7 @@ mod tests {
             management_rpc_timeout_for_command(&Command::PrepareRelease {
                 app: "demo".to_string(),
                 path: "/opt/tako/apps/demo/production/releases/v1".to_string(),
+                force: false,
             }),
             MANAGEMENT_DEPLOY_RPC_TIMEOUT
         );
@@ -495,6 +496,7 @@ mod tests {
                 storages: None,
                 ssl: tako_core::SslBinding::default(),
                 backup: None,
+                force: false,
             }),
             MANAGEMENT_DEPLOY_RPC_TIMEOUT
         );

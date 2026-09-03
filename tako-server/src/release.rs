@@ -683,7 +683,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         std::fs::write(
             temp.path().join("app.json"),
-            r#"{"release_kind":"container","app_name":"my-app","environment":"production","version":"v1","runtime":"container","main":"","idle_timeout":300,"container_file":"Dockerfile","container_port":3000}"#,
+            r#"{"protocol_version":0,"release_kind":"container","app_name":"my-app","environment":"production","version":"v1","runtime":"container","main":"","idle_timeout":300,"container_file":"Dockerfile","container_port":3000}"#,
         )
         .unwrap();
 
@@ -705,7 +705,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         std::fs::write(
             temp.path().join("app.json"),
-            r#"{"app_name":"my-app","environment":"production","version":"v1","runtime":"","main":"","start":["./app"],"idle_timeout":300}"#,
+            r#"{"protocol_version":0,"app_name":"my-app","environment":"production","version":"v1","runtime":"","main":"","start":["./app"],"idle_timeout":300}"#,
         )
         .unwrap();
 

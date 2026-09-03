@@ -130,6 +130,7 @@ async fn sync_app_workflows_uses_manifest_app_root() {
         std::fs::write(
             release.join("app.json"),
             serde_json::to_vec_pretty(&serde_json::json!({
+                "protocol_version": tako_core::PROTOCOL_VERSION,
                 "runtime": "bun",
                 "main": "index.js",
                 "idle_timeout": 300,
@@ -229,6 +230,7 @@ async fn sync_app_workflows_injects_release_env_and_app_data_dir_into_worker() {
     std::fs::write(
         release.join("app.json"),
         serde_json::to_vec_pretty(&serde_json::json!({
+            "protocol_version": tako_core::PROTOCOL_VERSION,
             "runtime": "bun",
             "main": "index.js",
             "idle_timeout": 300,
@@ -305,6 +307,7 @@ async fn sync_app_workflows_registers_go_worker_binary_from_manifest() {
     std::fs::write(
         release.join("app.json"),
         serde_json::to_vec_pretty(&serde_json::json!({
+            "protocol_version": tako_core::PROTOCOL_VERSION,
             "runtime": "go",
             "main": "app",
             "workflow_worker_main": "worker",

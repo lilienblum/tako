@@ -268,6 +268,7 @@ mod tests {
 
     fn container_manifest() -> ReleaseManifest {
         ReleaseManifest {
+            protocol_version: tako_core::PROTOCOL_VERSION,
             release_kind: crate::app_command::ReleaseKind::Container,
             app_name: "my-app".to_string(),
             environment: "production".to_string(),

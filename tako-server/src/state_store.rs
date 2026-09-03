@@ -8,6 +8,7 @@ mod encryption;
 mod schema;
 mod upgrade;
 
+pub(crate) use app_registry::load_persisted_releases_read_only;
 pub use device_key::load_or_create_device_key;
 
 pub const STATE_SCHEMA_VERSION: i32 = 8;
@@ -16,6 +17,12 @@ pub const STATE_SCHEMA_VERSION: i32 = 8;
 pub struct PersistedApp {
     pub config: crate::instances::AppConfig,
     pub routes: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PersistedRelease {
+    pub(crate) app_id: String,
+    pub(crate) version: String,
 }
 
 #[derive(Debug, thiserror::Error)]

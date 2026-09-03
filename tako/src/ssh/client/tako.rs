@@ -101,6 +101,18 @@ impl SshClient {
         self.tako_command_raw(json_command).await
     }
 
+    async fn tako_command_allow_incompatible(
+        &self,
+        json_command: &str,
+        allow_incompatible: bool,
+    ) -> SshResult<String> {
+        if allow_incompatible {
+            self.tako_command_raw(json_command).await
+        } else {
+            self.tako_command(json_command).await
+        }
+    }
+
     async fn tako_command_raw(&self, json_command: &str) -> SshResult<String> {
         let mut payload = String::with_capacity(json_command.len() + 1);
         payload.push_str(json_command);
@@ -215,10 +227,19 @@ impl SshClient {
     }
 
     pub async fn tako_server_info(&self) -> SshResult<ServerRuntimeInfo> {
+        self.tako_server_info_allow_incompatible(false).await
+    }
+
+    pub async fn tako_server_info_allow_incompatible(
+        &self,
+        allow_incompatible: bool,
+    ) -> SshResult<ServerRuntimeInfo> {
         let cmd = Command::ServerInfo;
         let json =
             serde_json::to_string(&cmd).map_err(|e| SshError::CommandFailed(e.to_string()))?;
-        let response_str = self.tako_command(&json).await?;
+        let response_str = self
+            .tako_command_allow_incompatible(&json, allow_incompatible)
+            .await?;
         parse_ok_data_response(response_str)
     }
 
@@ -255,22 +276,44 @@ impl SshClient {
     }
 
     pub async fn tako_enter_upgrading(&self, owner: &str) -> SshResult<()> {
+        self.tako_enter_upgrading_allow_incompatible(owner, false)
+            .await
+    }
+
+    pub async fn tako_enter_upgrading_allow_incompatible(
+        &self,
+        owner: &str,
+        allow_incompatible: bool,
+    ) -> SshResult<()> {
         let cmd = Command::EnterUpgrading {
             owner: owner.to_string(),
         };
         let json =
             serde_json::to_string(&cmd).map_err(|e| SshError::CommandFailed(e.to_string()))?;
-        let response_str = self.tako_command(&json).await?;
+        let response_str = self
+            .tako_command_allow_incompatible(&json, allow_incompatible)
+            .await?;
         parse_ok_unit_response(response_str)
     }
 
     pub async fn tako_exit_upgrading(&self, owner: &str) -> SshResult<()> {
+        self.tako_exit_upgrading_allow_incompatible(owner, false)
+            .await
+    }
+
+    pub async fn tako_exit_upgrading_allow_incompatible(
+        &self,
+        owner: &str,
+        allow_incompatible: bool,
+    ) -> SshResult<()> {
         let cmd = Command::ExitUpgrading {
             owner: owner.to_string(),
         };
         let json =
             serde_json::to_string(&cmd).map_err(|e| SshError::CommandFailed(e.to_string()))?;
-        let response_str = self.tako_command(&json).await?;
+        let response_str = self
+            .tako_command_allow_incompatible(&json, allow_incompatible)
+            .await?;
         parse_ok_unit_response(response_str)
     }
 

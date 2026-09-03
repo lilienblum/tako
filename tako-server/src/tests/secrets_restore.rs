@@ -96,6 +96,7 @@ async fn deploy_without_secrets_keeps_existing() {
             storages: None,
             ssl: tako_core::SslBinding::default(),
             backup: None,
+            force: false,
         })
         .await;
 
@@ -128,7 +129,7 @@ async fn failed_deploy_does_not_persist_credentials_for_unregistered_app() {
     std::fs::create_dir_all(&release_dir).unwrap();
     std::fs::write(
         release_dir.join("app.json"),
-        r#"{"runtime":"python","main":"server.py","idle_timeout":300}"#,
+        r#"{"protocol_version":0,"runtime":"python","main":"server.py","idle_timeout":300}"#,
     )
     .unwrap();
 
@@ -165,6 +166,7 @@ async fn failed_deploy_does_not_persist_credentials_for_unregistered_app() {
             storages: Some(storages),
             ssl: tako_core::SslBinding::default(),
             backup: None,
+            force: false,
         })
         .await;
 

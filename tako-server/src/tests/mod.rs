@@ -6,7 +6,7 @@ use super::release::{
 };
 use super::{
     Args, SIGNAL_PARENT_ON_READY_ENV, ServerRuntimeConfig, ServerState, extract_zstd_archive,
-    run_extract_archive_mode,
+    run_extract_archive_mode, run_protocol_compatibility_mode,
 };
 use crate::instances::AppConfig;
 use crate::runtime_events::{handle_idle_event, handle_instance_event};
@@ -57,6 +57,7 @@ fn write_release_manifest_with_app_dir(
     app_dir: &str,
 ) {
     let mut manifest = serde_json::json!({
+        "protocol_version": tako_core::PROTOCOL_VERSION,
         "runtime": runtime,
         "main": main,
         "idle_timeout": idle_timeout,
@@ -168,7 +169,7 @@ fn write_test_release_archive(archive_path: &Path) {
     let file = std::fs::File::create(archive_path).unwrap();
     let encoder = zstd::stream::write::Encoder::new(file, 3).unwrap();
     let mut archive = tar::Builder::new(encoder);
-    let manifest = br#"{"runtime":"bun","main":"src/index.ts","idle_timeout":300,"app_dir":""}"#;
+    let manifest = br#"{"protocol_version":0,"runtime":"bun","main":"src/index.ts","idle_timeout":300,"app_dir":""}"#;
     let mut header = tar::Header::new_gnu();
     header.set_size(manifest.len() as u64);
     header.set_mode(0o644);

@@ -43,14 +43,16 @@ fn test_prepare_release_command_roundtrip() {
     let cmd = Command::PrepareRelease {
         app: "my-app".to_string(),
         path: "/opt/tako/apps/my-app/releases/v1".to_string(),
+        force: false,
     };
     let json = serde_json::to_string(&cmd).unwrap();
     assert!(json.contains(r#""command":"prepare_release""#));
     let parsed: Command = serde_json::from_str(&json).unwrap();
     match parsed {
-        Command::PrepareRelease { app, path } => {
+        Command::PrepareRelease { app, path, force } => {
             assert_eq!(app, "my-app");
             assert_eq!(path, "/opt/tako/apps/my-app/releases/v1");
+            assert!(!force);
         }
         _ => panic!("Expected PrepareRelease command"),
     }
@@ -72,6 +74,7 @@ fn release_upload_commands_roundtrip() {
                 provider: SslProvider::LetsEncrypt,
                 cloudflare_api_token: Some("token".to_string()),
             },
+            force: false,
         },
         Command::CleanupRelease {
             app: "my-app/production".to_string(),
@@ -116,6 +119,7 @@ fn test_deploy_command_serialization_includes_scaling() {
         storages: None,
         ssl: SslBinding::default(),
         backup: None,
+        force: false,
     };
     let json = serde_json::to_string(&cmd).unwrap();
     assert!(json.contains(r#""command":"deploy""#));
@@ -138,6 +142,7 @@ fn test_deploy_command_serialization_includes_ssl_binding() {
             cloudflare_api_token: Some("token".to_string()),
         },
         backup: None,
+        force: false,
     };
 
     let json = serde_json::to_string(&cmd).unwrap();
@@ -235,6 +240,7 @@ fn test_deploy_command_serialization_includes_source_ip_mode() {
         storages: None,
         ssl: SslBinding::default(),
         backup: None,
+        force: false,
     };
 
     let json = serde_json::to_string(&cmd).unwrap();
@@ -259,6 +265,7 @@ fn test_deploy_command_deserialization_defaults_secrets_when_missing() {
             storages,
             ssl,
             backup,
+            force,
             ..
         } => {
             assert_eq!(source_ip, SourceIpMode::Auto);
@@ -266,6 +273,7 @@ fn test_deploy_command_deserialization_defaults_secrets_when_missing() {
             assert!(storages.is_none());
             assert_eq!(ssl.provider, SslProvider::LetsEncrypt);
             assert!(backup.is_none());
+            assert!(!force);
         }
         _ => panic!("Expected deploy command"),
     }
@@ -580,6 +588,7 @@ fn test_deploy_with_none_secrets_keeps_existing() {
         storages: None,
         ssl: SslBinding::default(),
         backup: None,
+        force: false,
     };
     let json = serde_json::to_string(&cmd).unwrap();
     let parsed: Command = serde_json::from_str(&json).unwrap();
@@ -622,6 +631,7 @@ fn parses_run_release_command() {
             command_line,
             vars,
             secrets,
+            force,
         } => {
             assert_eq!(app, "my-app");
             assert_eq!(version, "abc1234");
@@ -632,6 +642,7 @@ fn parses_run_release_command() {
                 secrets.get("DATABASE_URL").map(String::as_str),
                 Some("postgres://x")
             );
+            assert!(!force);
         }
         _ => panic!("Expected RunRelease command"),
     }

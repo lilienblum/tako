@@ -17,6 +17,7 @@ fn release_command_payload_includes_deploy_secrets() {
         storages: HashMap::new(),
         ssl: tako_core::SslBinding::default(),
         backup: None,
+        force: true,
         secrets_hash: String::new(),
         main: "index.ts".to_string(),
         use_unified_target_process: false,
@@ -30,6 +31,7 @@ fn release_command_payload_includes_deploy_secrets() {
         path,
         command_line,
         secrets,
+        force,
         ..
     }) = cfg.release_command_payload("/opt/tako/apps/my-app/production/releases/v1")
     else {
@@ -40,6 +42,7 @@ fn release_command_payload_includes_deploy_secrets() {
     assert_eq!(version, "v1");
     assert_eq!(path, "/opt/tako/apps/my-app/production/releases/v1");
     assert_eq!(command_line, "bun run migrate");
+    assert!(force);
     assert_eq!(
         secrets.get("DATABASE_URL").map(String::as_str),
         Some("postgres://new")
