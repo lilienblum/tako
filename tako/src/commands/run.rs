@@ -64,6 +64,7 @@ pub fn run(
     }
 
     crate::output::restore_cursor();
+    crate::telemetry::flush();
     std::process::exit(status.code().unwrap_or(1));
 }
 

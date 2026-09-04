@@ -8,6 +8,7 @@ mod output;
 mod paths;
 pub mod shell;
 mod tailscale;
+mod telemetry;
 mod ui;
 
 // Internal modules (moved from tako-core)
@@ -50,6 +51,7 @@ fn main() {
             crate::ui::cleanup_on_interrupt();
             crate::output::operation_cancelled();
         }
+        crate::telemetry::flush();
         std::process::exit(130);
     })
     .expect("failed to install Ctrl-C handler");
@@ -73,7 +75,9 @@ fn main() {
     }
 
     // Run the command
-    if let Err(e) = cli.run() {
+    let result = cli.run();
+    crate::telemetry::flush();
+    if let Err(e) = result {
         crate::output::restore_cursor();
         if crate::output::is_operation_cancelled_error(e.as_ref()) {
             let handled_in_ui =

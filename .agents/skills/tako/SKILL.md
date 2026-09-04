@@ -294,3 +294,5 @@ Uninstall Tako and remove all local data.
 | `--json`           | Structured stdout for agents and automation       |
 | `--dry-run`        | Show what would happen without side effects       |
 | `--config` / `-c`  | Use explicit config file instead of `./tako.toml` |
+
+Set `TAKO_TELEMETRY=0` to disable the CLI's anonymous per-command usage events.

@@ -66,6 +66,30 @@ fn top_level_status_command_parses() {
 }
 
 #[test]
+fn telemetry_command_uses_top_level_name() {
+    let cases = [
+        (&["tako", "init"][..], "init"),
+        (&["tako", "dev"][..], "dev"),
+        (&["tako", "dev", "vite", "dev"][..], "dev"),
+        (&["tako", "dev", "list"][..], "dev list"),
+        (&["tako", "dev", "stop"][..], "dev stop"),
+        (&["tako", "deploy", "--yes"][..], "deploy"),
+        (&["tako", "servers", "list"][..], "servers"),
+        (&["tako", "secrets", "list"][..], "secrets"),
+        (&["tako", "version"][..], "version"),
+        (&["tako", "scale", "2"][..], "scale"),
+    ];
+    for (args, expected) in cases {
+        let cli = Cli::try_parse_from(args).unwrap();
+        assert_eq!(
+            telemetry_command(cli.command.as_ref().expect("command")),
+            expected,
+            "args={args:?}"
+        );
+    }
+}
+
+#[test]
 fn uninstall_command_parses() {
     let cli = Cli::try_parse_from(["tako", "uninstall"]).unwrap();
     assert!(matches!(

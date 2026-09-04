@@ -251,12 +251,46 @@ pub enum Commands {
     },
 }
 
+fn telemetry_command(command: &Commands) -> &'static str {
+    match command {
+        Commands::Init => "init",
+        Commands::Logs { .. } => "logs",
+        Commands::Dev {
+            command: Some(DevSubcommands::Stop { .. }),
+            ..
+        } => "dev stop",
+        Commands::Dev {
+            command: Some(DevSubcommands::List),
+            ..
+        } => "dev list",
+        Commands::Dev { .. } => "dev",
+        Commands::Doctor => "doctor",
+        Commands::Status => "status",
+        Commands::Servers(_) => "servers",
+        Commands::Secrets(_) => "secrets",
+        Commands::Storages(_) => "storages",
+        Commands::Backups(_) => "backups",
+        Commands::Credentials { .. } => "credentials",
+        Commands::Releases(_) => "releases",
+        Commands::Upgrade => "upgrade",
+        Commands::Completions { .. } => "completions",
+        Commands::Uninstall { .. } => "uninstall",
+        Commands::Generate => "generate",
+        Commands::Run { .. } => "run",
+        Commands::Deploy { .. } => "deploy",
+        Commands::Delete { .. } => "delete",
+        Commands::Scale { .. } => "scale",
+        Commands::Version => "version",
+    }
+}
+
 impl Cli {
     pub fn run(self) -> Result<(), Box<dyn std::error::Error>> {
         crate::ssh::set_key_passphrase(self.ssh_passphrase.clone());
         let json = self.json;
 
         if self.version {
+            crate::telemetry::maybe_send("version", self.ci, &display_version());
             return print_version(json);
         }
 
@@ -276,6 +310,8 @@ impl Cli {
                 return Ok(());
             }
         };
+
+        crate::telemetry::maybe_send(telemetry_command(&command), self.ci, &display_version());
 
         match command {
             Commands::Version => print_version(json),

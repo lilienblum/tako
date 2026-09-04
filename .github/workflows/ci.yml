@@ -339,6 +339,7 @@ jobs:
       - name: Build
         env:
           TAKO_BUILD_SHA: ${{ github.sha }}
+          TAKO_POSTHOG_PROJECT_TOKEN: ${{ secrets.TAKO_POSTHOG_PROJECT_TOKEN }}
         run: |
           set -euo pipefail
           cargo build -p tako-server --release
@@ -409,6 +410,7 @@ jobs:
       - name: Build
         env:
           TAKO_BUILD_SHA: ${{ github.sha }}
+          TAKO_POSTHOG_PROJECT_TOKEN: ${{ secrets.TAKO_POSTHOG_PROJECT_TOKEN }}
         run: |
           set -euo pipefail
           cargo build -p tako-server --release
@@ -479,6 +481,7 @@ jobs:
       - name: Build
         env:
           TAKO_BUILD_SHA: ${{ github.sha }}
+          TAKO_POSTHOG_PROJECT_TOKEN: ${{ secrets.TAKO_POSTHOG_PROJECT_TOKEN }}
         run: |
           set -euo pipefail
           cargo build -p tako-cli --bin tako --bin tako-dev-server --bin tako-dev-proxy --release --target aarch64-apple-darwin

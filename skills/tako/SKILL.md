@@ -256,3 +256,5 @@ Uninstall Tako and remove all local data.
 | `--ci`             | Non-interactive, deterministic output (no colors) |
 | `--dry-run`        | Show what would happen without side effects       |
 | `--config` / `-c`  | Use explicit config file instead of `./tako.toml` |
+
+Set `TAKO_TELEMETRY=0` to disable the CLI's anonymous per-command usage events.

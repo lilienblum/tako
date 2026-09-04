@@ -32,7 +32,6 @@
       await navigator.clipboard.writeText(installCommand);
       setCopyButtonCopied(copyBtn, true);
       setCopyButtonText(copyBtn, copyBtnLabel, "copied", "copied");
-      window.posthog?.capture("install_command_copied");
       setTimeout(() => {
         setCopyButtonCopied(copyBtn, false);
         setCopyButtonText(copyBtn, copyBtnLabel, "copy", "copy install command");
@@ -53,7 +52,6 @@
       await navigator.clipboard.writeText(prompt);
       setCopyButtonCopied(agentCopyBtn, true);
       setCopyButtonText(agentCopyBtn, agentCopyBtnLabel, "copied", "copied");
-      window.posthog?.capture("agent_prompt_copied");
       setTimeout(() => {
         setCopyButtonCopied(agentCopyBtn, false);
         setCopyButtonText(agentCopyBtn, agentCopyBtnLabel, "copy", "copy agent prompt");

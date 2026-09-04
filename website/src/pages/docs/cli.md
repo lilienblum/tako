@@ -30,6 +30,8 @@ App-scoped commands that honor `-c`: `init`, `dev`, `run`, `logs`, `deploy`, `re
 
 For finite commands, `--json` prints one final object. Commands without a specialized schema use `{"ok":true,"command":"<command>"}`. Failures print `{"ok":false,"error":{"message":"..."}}` on stdout and the human-readable error on stderr. `tako logs --tail --json` is the streaming exception: it emits one structured log event per stdout line until interrupted. `tako run` is also an exception: child stdout stays untouched and no JSON result object is appended.
 
+Installed CLIs send an anonymous event per command so we can count unique users and see which commands run. Set `TAKO_TELEMETRY=0` to opt out. See [Usage stats](#usage-stats).
+
 ## Project Setup
 
 ```bash
@@ -260,3 +262,15 @@ tako version
 ```
 
 `completions` installs bash, zsh, and fish completion scripts for shells that are on `PATH`. zsh is installed only when a writable directory is already on `fpath`; otherwise Tako prints how to add one. `upgrade` updates the local CLI install. On macOS, official CLI upgrades support Apple Silicon only. `uninstall` removes local Tako binaries, local data, completion scripts, and platform-specific dev services/config after confirmation.
+
+## Usage stats
+
+Official CLI installs send one anonymous event per command so we can count unique users and see which commands run (`deploy`, `dev`, `init`, and so on). The event includes CLI version, OS, architecture, and the command name. It does not include app names, paths, server hosts, environment names, or command arguments. `tako-server` does not send usage stats.
+
+Opt out:
+
+```bash
+export TAKO_TELEMETRY=0
+```
+
+Usage stats are off in CI (`CI=true` or `--ci`) and in local Cargo builds. Set `TAKO_TELEMETRY=1` to send from those environments.

@@ -132,34 +132,6 @@
 		</script>
 		<script is:inline>
 			(function () {
-				document
-					.querySelectorAll('a[href*="github.com"]')
-					.forEach(function (link) {
-						link.addEventListener("click", function () {
-							window.posthog?.capture("github_clicked", {
-								href: link.getAttribute("href"),
-								location: link.closest("header")
-									? "header"
-									: "footer",
-							});
-						});
-					});
-				document
-					.querySelectorAll('a[href*="discord.gg/"]')
-					.forEach(function (link) {
-						link.addEventListener("click", function () {
-							window.posthog?.capture("discord_clicked", {
-								href: link.getAttribute("href"),
-								location: link.closest("header")
-									? "header"
-									: "footer",
-							});
-						});
-					});
-			})();
-		</script>
-		<script is:inline>
-			(function () {
 				if (
 					!("navigator" in window) ||
 					!navigator.modelContext ||
