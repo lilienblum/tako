@@ -80,7 +80,9 @@ Build precedence:
 3. Runtime default
 4. No-op
 
-Tako copies the source root into `.tako/build`, respects `.gitignore`, symlinks `node_modules` from the original tree for JS builds, preserves symlinks as symlinks, runs build commands, merges assets into `public/`, verifies the resolved `main`, and archives the result without `node_modules`.
+Tako copies the source root into `.tako/build`, respects `.gitignore`, symlinks `node_modules` from the original tree for JS builds, omits source symlinks, runs build commands, merges assets into `public/`, verifies the resolved `main`, and archives the result without `node_modules`.
+
+The final native artifact includes regular files only; build-created symlinks are omitted too. Do not depend on linked files being deployed. This differs from app data backups, which preserve symlinks.
 
 Always-excluded paths: `.git/`, `.tako/`, `.env*`, and `node_modules/`.
 

@@ -12,6 +12,10 @@ Tako channels try to make the live part feel like one model. You define a channe
 
 Durability is part of the channel contract, but it is scoped to delivery. Every publish is written to a bounded replay log before fanout, so reconnecting clients can catch up after short disconnects without turning the channel into your app's permanent history API.
 
+## Parameter safety
+
+The `roomId` examples below demonstrate typed connection context, not isolated rooms. In the current protocol, replay and fanout are keyed by the channel name: all authorized bindings to `presence` or `chat` receive that channel's messages, regardless of params. A per-room authorization check does not partition delivery. Do not use these examples for private room traffic; see the [Channels reference](/docs/channels/#understand-channel-params).
+
 ## The channel is the contract
 
 A JavaScript or TypeScript channel is a default export from `src/channels/*.ts` by default. The first argument is the wire name, `paramsSchema` is a TypeBox schema, `auth.verify` decides access, and `transport: "ws"` selects bidirectional WebSocket transport.
@@ -93,7 +97,7 @@ await presence({ roomId: "lobby" }).publish({
 
 The `.$messageTypes<PresenceMessages>()` call is type-only, but it is enough for TypeScript to reject the wrong message type or payload shape. At runtime, the proxy stores each publish in the bounded replay log and fans it out to subscribers.
 
-Browser clients should reconnect automatically after network loss, laptop sleep, or server restarts. Tako Channels reconnect with the last received message id and replay what is still inside the channel's retention window.
+SSE subscriptions reconnect automatically, and React `useChannel` reconnects WebSockets with the last received message id. A lower-level `Channel.connect()` returns one socket; its caller owns reconnection. Replay only covers messages still inside the retention window.
 
 That window is intentionally short by default: 10 minutes.
 

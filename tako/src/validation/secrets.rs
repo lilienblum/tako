@@ -172,6 +172,7 @@ mod tests {
         secrets.set("staging", "API_KEY", "z".to_string()).unwrap();
 
         let result = validate_secrets_for_deployment(&secrets, "production");
+        // CodeQL[rust/cleartext-logging]: diagnostics contain fixture names and expiry metadata, not real secret values.
         assert!(
             !result.has_errors(),
             "unexpected errors: {:?}",
@@ -197,6 +198,7 @@ mod tests {
 
         let result = validate_secrets_for_deployment(&secrets, "production");
 
+        // CodeQL[rust/cleartext-logging]: diagnostics contain fixture names and expiry metadata, not real secret values.
         assert!(
             !result.has_errors(),
             "unexpected errors: {:?}",
@@ -219,6 +221,7 @@ mod tests {
         secrets.set("staging", "DB_URL", "w".to_string()).unwrap();
 
         let result = validate_secrets_for_deployment(&secrets, "production");
+        // CodeQL[rust/cleartext-logging]: diagnostics contain fixture names and expiry metadata, not real secret values.
         assert!(
             !result.has_errors(),
             "unexpected errors: {:?}",
@@ -242,6 +245,7 @@ mod tests {
         let result = validate_secrets_for_deployment(&secrets, "production");
 
         assert!(result.has_errors());
+        // CodeQL[rust/cleartext-logging]: diagnostics contain fixture names and expiry metadata, not real secret values.
         assert!(
             result.errors.iter().any(|error| {
                 error.contains("API_KEY") && error.contains("expired on 2000-01-01")
@@ -266,7 +270,9 @@ mod tests {
 
         let result = validate_secrets_for_deployment(&secrets, "production");
 
+        // CodeQL[rust/cleartext-logging]: diagnostics contain fixture names and expiry metadata, not real secret values.
         assert!(!result.has_errors(), "{:?}", result.errors);
+        // CodeQL[rust/cleartext-logging]: diagnostics contain fixture names and expiry metadata, not real secret values.
         assert!(
             result.warnings.iter().any(|warning| {
                 warning.contains("API_KEY") && warning.contains("expires within 30 days")

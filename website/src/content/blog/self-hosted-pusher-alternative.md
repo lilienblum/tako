@@ -44,6 +44,8 @@ const channel = new Pusher(key, { cluster: "us2" }).subscribe("chat-room-42");
 channel.bind("typing", (data) => console.log(data));
 ```
 
+Unlike the Pusher room-specific channel name above, a Tako `roomId` parameter does not create a separate stream. All authorized bindings to one Tako channel receive the same replay and live messages. The following examples show connection context only, not private room isolation; do not use them as a substitute for isolated room channels. See [channel parameter semantics](/docs/channels/#understand-channel-params).
+
 The Tako shape is file-based. Channel definitions live next to your app code and the proxy discovers them at deploy time:
 
 ```ts

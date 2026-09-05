@@ -255,6 +255,7 @@ mod tests {
             "CapAmb:\t0000000000000000".into(),
             "NoNewPrivs:\t1".into(),
         ] {
+            // CodeQL[rust/cleartext-logging]: this test prints OS identity metadata from an isolated child with a cleared environment.
             assert!(text.contains(&field), "missing {field}: {text}");
         }
         assert_eq!(

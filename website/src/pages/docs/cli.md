@@ -26,7 +26,7 @@ Progress, prompts, diagnostics, and logs go to stderr. Command results and machi
 | `-c`, `--config <CONFIG>`       | Use an explicit config file. `.toml` is appended when omitted.                                                                  |
 | `--ssh-passphrase <PASSPHRASE>` | Use a passphrase for encrypted local SSH keys.                                                                                  |
 
-App-scoped commands that honor `-c`: `init`, `dev`, `run`, `logs`, `deploy`, `releases`, `backups`, `delete`, `secrets`, `storages`, `generate`, and project-context `scale`.
+App-scoped commands that honor `-c`: `init`, `dev`, `run`, `logs`, `deploy`, `releases`, `backups`, `delete`, `secrets`, `credentials`, `storages`, `generate`, and project-context `scale`.
 
 For finite commands, `--json` prints one final object. Commands without a specialized schema use `{"ok":true,"command":"<command>"}`. Failures print `{"ok":false,"error":{"message":"..."}}` on stdout and the human-readable error on stderr. `tako logs --tail --json` is the streaming exception: it emits one structured log event per stdout line until interrupted. `tako run` is also an exception: child stdout stays untouched and no JSON result object is appended.
 
@@ -63,7 +63,7 @@ tako dev --tunnel
 tako dev --restart
 ```
 
-Starts or attaches to a local dev session behind trusted HTTPS and real hostnames. It starts the dev daemon, prepares DNS/proxy/CA setup, generates files, injects secrets and storage through fd 3, waits for fd-4 readiness, and registers routes.
+Starts or attaches to a local dev session behind trusted HTTPS and real hostnames. `--variant foo` uses a variant hostname such as `myapp-foo.test`; `--restart` restarts the process with the current config instead of attaching. It starts the dev daemon, prepares DNS/proxy/CA setup, generates files, injects secrets and storage through fd 3, waits for fd-4 readiness, and registers routes.
 
 Pass a command after `tako dev` to override the configured dev command for that run:
 
@@ -125,21 +125,6 @@ Script files are expanded by the selected runtime. Bun runs JS/TS scripts with B
 The child process receives `[vars]` plus `[vars.<env>]`, `ENV`, `TAKO_BUILD=local`, `TAKO_DATA_DIR`, runtime defaults, and `TAKO_APP_ROOT` for JS apps. Tako decrypts local app secrets for the selected environment and passes the normal bootstrap envelope through `TAKO_BOOTSTRAP_DATA`. SDK-aware scripts use the same app SDK surfaces; JS/TS scripts can import `tako` and use `tako.secrets` and `tako.storages`.
 
 Secrets are not process env vars. `tako run` is local-only in v0; it does not run commands on deployed servers.
-
-## Development
-
-```bash
-tako dev [--variant <name>] [--tunnel] [--restart] [command...]
-tako dev stop [name] [--all]
-tako dev list
-tako dev ls
-```
-
-`tako dev` starts or attaches to the local dev daemon and registers the selected app config. `--variant foo` runs a variant hostname such as `myapp-foo.test`. `--tunnel` starts with a temporary public tunnel URL. `--restart` hard-restarts the process with the current config instead of attaching. `command...` overrides `dev` in `tako.toml`, preset dev commands, and runtime defaults for this run.
-
-Interactive shortcuts: `r` restarts, `l` toggles LAN `.local` aliases, `t` toggles tunnel mode, `b` backgrounds the app, and `Ctrl-C` unregisters it.
-
-The interactive status panel always shows local routes plus LAN and tunnel state. LAN and tunnel rows include enable/disable hints, and tunnel shows starting or reconnecting state while it connects. Tunnel hostnames use `{app}-{id}.tako.website`; the id is derived from the app name and Tako Identity, so the same app gets the same URL when the same identity is available. One Tako Identity can have up to five active tunnel URLs connected at the same time; starting a sixth closes the oldest active tunnel for that identity. Inactive tunnel URLs show a Tako error page in browsers and machine-readable errors for API clients.
 
 ## Deploy And Runtime Operations
 
@@ -220,11 +205,13 @@ Expiry accepts `YYYY-MM-DD`, `in N days`, or `never`. Deploy fails on expired se
 ## Provider Credentials
 
 ```bash
-tako credentials set [name] --env <env> [--expires-on <when>]
+tako credentials set [name] [--env <env>] [--expires-on <when>]
 tako creds set ...
-tako credentials rm <name> --env <env>
+tako credentials rm <name> [--env <env>]
 tako credentials list
 ```
+
+Running `tako credentials` without a subcommand lists credentials. Set and remove prompt for an environment when `--env` is omitted; non-interactive use requires `--env`.
 
 Provider credentials are Tako-owned runtime credentials, not app secrets. Supported names are `ssl.cloudflare` and `postgres_url`. They are encrypted in `.tako/secrets.json`, never exposed to app code, and not synced by `tako secrets sync`.
 
@@ -236,6 +223,8 @@ Provider credentials are Tako-owned runtime credentials, not app secrets. Suppor
 tako storages add <binding> [--env <env>] [--resource <resource>] [--provider s3|local] [--bucket <bucket>] [--endpoint <https-url>] [--region <region>] [--access-key-id <value>] [--secret-access-key <value>] [--expires-on <when>] [--force-path-style] [--public-base-url <https-url>]
 tako storages credentials <resource> [--env <env>] [--access-key-id <value>] [--secret-access-key <value>] [--expires-on <when>]
 ```
+
+Storage commands default to `--env production` and `--provider s3`.
 
 `storages add` writes the app binding to `tako.toml`. For S3 resources it also writes resource metadata and encrypted credentials. `storages credentials` rotates credentials for an existing top-level S3 resource without adding an app binding, which is useful for backup-only resources.
 

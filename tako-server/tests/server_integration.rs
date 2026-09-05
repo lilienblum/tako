@@ -213,6 +213,7 @@ impl TestServer {
 
         runtime.block_on(async move {
             let client = reqwest::Client::builder()
+                // CodeQL[rust/disabled-certificate-check]: test-only client resolves the fixture certificate host to loopback.
                 .danger_accept_invalid_certs(true)
                 .resolve(host, resolve)
                 .connect_timeout(Duration::from_secs(5))

@@ -103,6 +103,7 @@ async fn delete_command_rejects_invalid_app_name() {
     let Response::Error { message } = response else {
         panic!("expected invalid app name to be rejected");
     };
+    // CodeQL[rust/cleartext-logging]: this invalid-name delete fixture supplies no secrets.
     assert!(message.contains("Invalid app name"), "got: {message}");
 }
 

@@ -65,6 +65,7 @@ async fn run_release_executes_command_in_release_dir() {
 
     let data = match response {
         Response::Ok { data } => data,
+        // CodeQL[rust/cleartext-logging]: release-command assertions use only empty secrets or fabricated fixture credentials.
         Response::Error { message } => panic!("expected ok, got: {message}"),
     };
     assert_eq!(data.get("exit_code").and_then(|v| v.as_i64()), Some(0));
@@ -123,12 +124,15 @@ async fn run_release_returns_error_on_nonzero_exit() {
         .await;
 
     let Response::Error { message } = response else {
+        // CodeQL[rust/cleartext-logging]: release-command assertions use only empty secrets or fabricated fixture credentials.
         panic!("expected error response, got: {response:?}");
     };
+    // CodeQL[rust/cleartext-logging]: release-command assertions use only empty secrets or fabricated fixture credentials.
     assert!(
         message.contains('3'),
         "expected exit code in message: {message}"
     );
+    // CodeQL[rust/cleartext-logging]: release-command assertions use only empty secrets or fabricated fixture credentials.
     assert!(
         message.contains("boom"),
         "expected stderr in message: {message}"
@@ -213,8 +217,10 @@ async fn run_release_rejects_protocol_mismatch_before_executing_command() {
         .await;
 
     let Response::Error { message } = response else {
+        // CodeQL[rust/cleartext-logging]: release-command assertions use only empty secrets or fabricated fixture credentials.
         panic!("expected protocol mismatch, got: {response:?}");
     };
+    // CodeQL[rust/cleartext-logging]: release-command assertions use only empty secrets or fabricated fixture credentials.
     assert!(
         message.contains("Protocol version mismatch"),
         "got: {message}"
@@ -270,6 +276,7 @@ async fn run_release_force_attempts_protocol_mismatch() {
         .await;
 
     let Response::Ok { .. } = response else {
+        // CodeQL[rust/cleartext-logging]: release-command assertions use only empty secrets or fabricated fixture credentials.
         panic!("expected forced release command to run, got: {response:?}");
     };
     assert!(release_dir.join("forced").exists());

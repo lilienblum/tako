@@ -34,7 +34,7 @@ export default function fetch(req: Request): Response {
 }
 ```
 
-`tako.d.ts` is generated under the JavaScript `app_root` from `tako.toml` (`src` by default). It augments `tako.sh` with typed secrets, environment names, channel metadata, workflow metadata, and `process.env` / `import.meta.env` types for user vars. App code imports Tako runtime values from `tako.sh`, not from generated env-var globals.
+`tako generate` preserves an existing `tako.d.ts` in `app/`, `src/`, or the project root, in that order. Otherwise it writes to the first existing `app/` or `src/` directory, falling back to the project root. This location is independent of `app_root`, which controls channel and workflow discovery. It augments `tako.sh` with typed secrets, environment names, channel metadata, workflow metadata, and `process.env` / `import.meta.env` types for user vars. App code imports Tako runtime values from `tako.sh`, not from generated env-var globals.
 
 ## Images
 
@@ -51,7 +51,7 @@ const avatar = imageUrl("/avatars/u_123.png", {
 
 const hero = imageUrl("/assets/hero.jpg", {
   width: 1200,
-  quality: 80,
+  quality: 75,
 });
 
 const responsiveHero = imageSrcSet("/assets/hero.jpg", {
@@ -59,6 +59,8 @@ const responsiveHero = imageSrcSet("/assets/hero.jpg", {
   width: 1200,
 });
 ```
+
+The server checks widths and explicit quality values against `[images].sizes` and `[images].qualities`; the default quality allowlist is `[75]`. The JavaScript helpers currently accept only widths 320, 640, 960, 1200, and 1920, even when the server allows more.
 
 Omit `format` for the optimizer default. Tako defaults to WebP; set `format: "avif"` only when the app's `[images].formats` allows AVIF.
 
@@ -139,11 +141,11 @@ export default defineChannel("chat", {
 ```
 
 - The first argument is the wire channel name. New scaffolded files use the file stem as the default name, but Tako does not rewrite existing channel files if you choose a different name.
-- Dynamic values are typed query params from `paramsSchema`.
+- Dynamic values are typed query params from `paramsSchema`. They do not partition replay or fanout: every authorized binding to `chat` receives the same messages, regardless of `roomId`. Do not use params for room or tenant isolation.
 - `auth` is optional — omit or set `false` for public channels. Declarative auth receives `{ header?, cookie?, params, channel, operation }`.
 - Call `.$messageTypes<T>()` to type the per-message-type payloads. Set `transport: "ws"` to enable WebSocket client publishing; omit it for SSE subscriptions.
 - Every publish is stored in Tako's bounded channel replay log before delivery. Single-server production stores replay in local SQLite by deployed app id (`{name}/{env}`); local dev keeps replay in memory for the current daemon process. Multi-server channels use shared Postgres configured through the `postgres_url` credential. `replayWindowMs` defaults to 10 minutes and can be overridden per channel.
-- Browser subscriptions keep reconnecting until closed. The SDK retries through network loss, laptop sleep, server restarts, and clean connection rotation, then resumes from the last received message id inside the bounded replay window.
+- SSE subscriptions reconnect until closed, and the React `useChannel` hook reconnects WebSockets with the latest cursor. A lower-level `Channel.connect()` returns one socket; its caller owns WebSocket reconnection.
 - Browser clients can pass `authorization: token` to send `Authorization: Bearer <token>` on SSE channels or the equivalent WebSocket auth frame. Use `headers.Authorization` for custom authorization values, and omit both options for public or cookie-auth channels.
 
 Publish by importing the channel wherever you need it:
@@ -231,7 +233,7 @@ On dev (`vite dev`), the plugin:
 - binds Vite to `127.0.0.1:$PORT` with `strictPort: true` when `PORT` is provided
 - routes Vite-process `console.*`, stdout, and stderr through structured Tako app log events under `tako dev`
 
-Deploy entry resolution uses `main` from `tako.toml`, then preset top-level `main`.
+Deploy entry resolution uses `main` from `tako.toml`, then the runtime manifest field (`package.json` `main` for JavaScript), then the preset.
 For Vite apps, point `tako.toml main` at the generated wrapper, for example:
 
 ```toml
@@ -299,5 +301,5 @@ bun test
 
 ## Related Docs
 
-- `../../website/src/pages/docs/quickstart.md`
+- [Quickstart](../../website/src/pages/docs/quickstart.astro)
 - `../../examples/javascript/demo/README.md`

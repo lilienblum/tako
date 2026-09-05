@@ -86,7 +86,7 @@ app := fiber.New()
 app.Listener(ln)
 ```
 
-**Important:** When using `Listener()` directly, your app must handle the Tako protocol itself (health checks on `Host: <app>.tako`, secrets endpoint). Most apps should use `ListenAndServe` instead.
+**Important:** When using `Listener()` directly, your app must handle the Tako protocol itself (authenticated health checks on `Host: <app>.tako`). Most apps should use `ListenAndServe` instead.
 
 ### `tako.InstanceID() string`
 
@@ -148,7 +148,7 @@ The SDK transparently handles these — you don't interact with them directly:
 
 - `GET /status` on `Host: <app>.tako` — health check (returns JSON with status, instance_id, version, pid, uptime_seconds)
 - `POST /channels/authorize` on `Host: <app>.tako` — channel auth callback for `tako-server`
-- Token authentication via `x-tako-internal-token` header (required in production, skipped in dev)
+- Token authentication via `x-tako-internal-token` whenever bootstrap supplies a token, including managed development
 - Secrets are read from the Tako bootstrap envelope at process startup, not via HTTP. Native processes use fd 3; containers use `TAKO_BOOTSTRAP_DATA`.
 
 ## Common Mistakes

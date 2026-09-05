@@ -127,6 +127,7 @@ impl CloudflareOriginCaClient {
         });
         let response = self
             .http
+            // CodeQL[rust/cleartext-transmission]: production constructors fix api_base_url to Cloudflare HTTPS; HTTP override is test-only.
             .post(format!("{}/certificates", self.api_base_url))
             .bearer_auth(&self.api_token)
             .header(CONTENT_TYPE, "application/json")

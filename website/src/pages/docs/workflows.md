@@ -61,6 +61,7 @@ Useful definition options include:
 | ---------- | ---------------------------------------------------------------------------------- |
 | `retries`  | Retries after the first run attempt. The default is `2`, for three total attempts. |
 | `backoff`  | Run-level retry timing with optional `base` and `max` values in milliseconds.      |
+| `worker`   | JavaScript worker group; omitted means the default lane.                           |
 | `schedule` | A five-field cron expression such as `"0 9 * * 1-5"`.                              |
 | `local`    | Keep the workflow on per-server local storage in a multi-server environment.       |
 
@@ -174,7 +175,7 @@ Workflow and step lifecycle logs appear in the normal Tako log stream. Use `ctx.
 
 Tako keeps no workflow worker running while the queue has no runnable work. Enqueue, cron, a signal, a due retry or sleep, and reclaimed work can wake a worker. The worker exits after its idle window and the next runnable run starts a fresh process.
 
-Production starts one scale-to-zero lane per worker group. Workflows with `worker: "email"` run in a process that only claims that group. The config parser also accepts worker counts, concurrency, and per-server overrides; those values are not applied yet.
+Production starts one scale-to-zero lane per JavaScript worker group; Go and container workers use a single lane. Workflows with `worker: "email"` run in a process that only claims that group. The config parser also accepts worker counts, concurrency, and per-server overrides; those values are not applied yet.
 
 JavaScript and Go workers honor the runtime-provided lane concurrency (currently 500). Go workers stop claiming on cancellation and wait for active handlers to finish, continuing their lease heartbeats while draining. Concurrency is a worker setting; `defineWorkflow` does not expose per-workflow concurrency or handler timeouts.
 

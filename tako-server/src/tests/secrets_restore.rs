@@ -23,6 +23,7 @@ async fn get_secrets_hash_returns_hash_of_app_secrets() {
         })
         .await;
     let Response::Ok { data } = &response else {
+        // CodeQL[rust/cleartext-logging]: this temporary store contains only empty or fabricated fixture secrets.
         panic!("expected ok response: {response:?}");
     };
     let empty_hash = data.get("hash").and_then(Value::as_str).unwrap();
@@ -171,6 +172,7 @@ async fn failed_deploy_does_not_persist_credentials_for_unregistered_app() {
         })
         .await;
 
+    // CodeQL[rust/cleartext-logging]: this temporary store contains only empty or fabricated fixture secrets.
     assert!(
         matches!(response, Response::Error { .. }),
         "expected unsupported runtime deploy failure: {response:?}"

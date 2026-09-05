@@ -24,6 +24,8 @@ route = "my-app.example.com"
 servers = ["prod-a"]
 ```
 
+Unknown top-level fields are rejected. Paths such as `app_root`, `container`, and asset directories must be relative and cannot contain parent traversal (`..`).
+
 `name` is optional but recommended. If omitted, Tako derives the app name from the selected config file's parent directory. Remote identity is `{name}/{env}`, so renaming the app or directory fallback creates a separate deployed app.
 
 App names are DNS-compatible. They use lowercase letters, numbers, and hyphens, start with a lowercase letter, end with a lowercase letter or number, and contain at most 63 characters.
@@ -72,7 +74,7 @@ Routes support exact hosts, wildcard hosts, host-plus-path routes, and wildcard-
 
 Environment tables accept route declarations, `servers`, `storages`, `backup`, `source_ip`, `ssl`, `idle_timeout`, and `release`. Put environment variables in `[vars]` or `[vars.<env>]`, not in `[envs.<env>]`.
 
-`idle_timeout` defaults to 300 seconds. `ssl` defaults to `letsencrypt` and can be `cloudflare`. `source_ip` can be omitted or set to `auto`, `direct`, `cloudflare-proxy`, or `trusted-proxy`.
+`idle_timeout` must be greater than zero and defaults to 300 seconds. `ssl` defaults to `letsencrypt` and can be `cloudflare`. `source_ip` can be omitted or set to `auto`, `direct`, `cloudflare-proxy`, or `trusted-proxy`.
 
 Environment-level `release` overrides the top-level release command. An empty string clears an inherited top-level command for that environment.
 
@@ -120,7 +122,9 @@ cwd = "apps/web"
 run = "bun run build"
 ```
 
-`[build]` and `[[build_stages]]` are mutually exclusive. Build stage precedence is `[[build_stages]]`, then `[build]`, then the runtime default. JS defaults run the package manager's build script when present. Go defaults build `app`, and also `worker` when `cmd/worker/main.go` exists.
+Use `[build]` for a simple build or `[[build_stages]]` for multiple stages. Tako rejects combining stages with a non-empty `[build].run` or any `[build].include`/`exclude` entries. Build stage precedence is `[[build_stages]]`, then `[build]`, then the runtime default. JS defaults run the runtime lane's build script when present. Go defaults build `app`, and also `worker` when `cmd/worker/main.go` exists.
+
+`[[build_stages]].run` is required and cannot be empty. Each stage accepts only `name`, `cwd`, `install`, `run`, and `exclude`; artifact `include` is available only on `[build]`.
 
 Simple `[build].cwd` must stay inside the project. Multi-stage `cwd` can use `..` for monorepos but cannot escape the source workspace.
 
@@ -134,6 +138,10 @@ sizes = [320, 640, 960, 1200, 1920]
 qualities = [75]
 formats = ["webp", "avif"]
 ```
+
+The default sizes are `[320, 640, 960, 1200, 1920]`, qualities `[75]`, and formats `["webp"]`. Each array replaces its default and must be non-empty; sizes must be positive and qualities must be between 1 and 100. An explicit URL quality must appear in `qualities`; a request without one uses 75. The example above enables AVIF as well as WebP.
+
+The JavaScript `imageUrl` and `imageSrcSet` helpers currently accept only the five default widths, even if you configure additional server sizes. Keep helper-generated widths in the server allowlist. Non-default quality values also need to be allowed by the server.
 
 Local image paths default to `["/**"]`; setting `local_patterns` replaces that default. Remote images are denied unless they match `remote_patterns`. Patterns are glob-like URL strings: `*` matches one segment and `**` matches the rest of a path. Remote patterns without a protocol match both `http` and `https`.
 
@@ -194,7 +202,9 @@ run = ["./worker", "email"]
 
 `run` provides an explicit worker command for runtimes that need one. In v0, container releases support one configured workflow command.
 
-The current production runtime supervises one scale-to-zero workflow lane per app. The config parser accepts `workers`, `concurrency`, named groups, and per-server overrides, but those values do not yet change production worker supervision. Do not depend on them until the runtime wiring ships.
+Production supervises one scale-to-zero lane per JavaScript worker group, selected by `worker: "name"` in workflow definitions, with an additional default lane. Each lane currently receives concurrency 500 and a 300-second idle timeout. Go and container workers use a single lane.
+
+The parser accepts `run`, `workers`, and `concurrency` in `[workflows]`, `[workflows.<group>]`, `[servers.<server>.workflows]`, and `[servers.<server>.workflows.<group>]`. Parsed count/concurrency precedence is defaults (`workers = 0`, `concurrency = 10`), app base, app group, server base, then server group. These parsed counts and overrides do not yet control production supervision; do not rely on them to tune running workers. `run` must be a non-empty array of non-empty strings. Group and server names follow the app-name rules.
 
 In multi-server environments, JS workflows require `postgres_url` unless every workflow opts into local per-server execution. Go workflow deployments require `postgres_url` for multi-server environments. Channels also require `postgres_url` for multi-server deploys so every server can read and publish to the same broadcast replay log.
 

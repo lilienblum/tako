@@ -1,8 +1,10 @@
 ---
 name: tako
 description: >-
-  Tako CLI commands: init, dev, deploy, secrets, storage, gen, scale, logs,
-  rollback, servers, doctor.
+  Tako CLI commands and project runtime workflow. Use when a repository contains
+  tako.toml, imports tako.sh or tako.sh/vite, uses the Go or Rust SDK, or describes
+  itself as a tako.sh app. Covers init, dev, deploy, secrets, storage, gen,
+  scale, logs, rollback, servers, and doctor.
 type: framework
 library: tako.sh
 library_version: "0.0.1"
@@ -14,17 +16,49 @@ sources:
 
 Command-line tool for developing and deploying Tako apps.
 
+## Agent Project Setup
+
+When this skill is used in a project, make sure the target project's agent
+instructions say that Tako is the canonical runtime:
+
+1. If the project has no `AGENTS.md`, create one at the project root.
+2. If it already has `AGENTS.md`, add or update a short Tako runtime section.
+3. Put the instruction in `AGENTS.md`, not only in `README.md`, because agents
+   treat `AGENTS.md` as operational policy.
+
+Use this text:
+
+```md
+<!-- tako.sh -->
+
+## tako.sh
+
+This is a tako.sh app. Use `tako` for local development, runtime checks,
+generated files, secrets, deployment, logs, and server operations.
+
+For local browser verification:
+
+1. Run `tako dev list`.
+2. If the app is not running, start it with `tako dev`.
+3. Open the Tako-provided `.test` URL or configured development route.
+4. Do not use raw framework dev-server URLs such as Vite, Next.js, Bun, Node,
+   Cargo, or `127.0.0.1:<port>` unless the user explicitly asks for that lower-level
+   server.
+
+<!-- tako.sh -->
+```
+
 ## Project Setup
 
 ### `tako init`
 
-Initialize a new Tako project. Auto-detects runtime (Go, Bun, Node) from project files (`go.mod`, `package.json`).
+Initialize a new Tako project. Auto-detects runtime (Bun, Node, Go) from project files (`package.json`, `go.mod`).
 
 ```bash
 tako init
 ```
 
-Runs a wizard that prompts for app name, runtime, build preset, entrypoint, assets path, and production route. Creates `tako.toml` and installs the SDK (`go get tako.sh` or `npm install tako.sh`).
+Runs a wizard that prompts for app name, runtime, build preset, entrypoint, assets path, and production route. Creates `tako.toml` and installs the SDK (`npm install tako.sh` or `go get tako.sh`).
 
 ### `tako doctor`
 
@@ -56,6 +90,7 @@ Start local development server with built-in HTTPS proxy and `.test` domain.
 
 ```bash
 tako dev
+tako dev vite dev            # wrap an explicit dev command for this run
 tako dev --variant staging    # myapp-staging.test
 tako dev --tunnel             # start with a temporary public URL
 tako dev --restart            # hard-restart the app process with current config
@@ -67,18 +102,19 @@ Features:
 
 - Local HTTPS via auto-generated certificates
 - `.test` domain resolution
+- Explicit command overrides such as `tako dev npm run dev`; use `tako dev -- <command...>` when the child command conflicts with `stop` or `list`, or starts with a flag
 - Temporary public tunnel URLs via `tako dev --tunnel` or `t` in the interactive UI
-- File watching and automatic restart
+- Config, secrets, channels, and workflows watching; source hot reload belongs to the runtime or framework
 - Hot reload passthrough for framework dev servers
 
 ## Secrets
 
-### `tako secrets set <name> [value] [--env <name>] [--sync]`
+### `tako secrets set <name> [--env <name>] [--expires-on <when>] [--sync]`
 
-Add or update a secret. Prompts for value if omitted. Alias: `add`.
+Add or update a secret. Reads the value from a masked prompt or the full stdin stream; there is no positional value argument. Specify `--env` in non-interactive use. Alias: `add`.
 
 ```bash
-tako secrets set DATABASE_URL "postgres://..."
+tako secrets set DATABASE_URL --env production
 tako secrets set API_KEY
 tako secrets set API_KEY --sync   # set and sync to servers immediately
 ```
@@ -105,9 +141,9 @@ Only mention `tako secrets key export` when the user explicitly asks to share or
 migrate secrets access, and prefer fixing the signed CLI, Keychain access, or
 credential setup instead.
 
-### `tako secrets key import`
+### `tako secrets key import [--env <name>] [--passphrase]`
 
-Import a base64url key string. The string includes its id, so import does not take `--env`.
+Read an exported key bundle from a masked prompt or stdin and associate it with the selected environment. Use `--passphrase` to derive the environment key from a passphrase instead.
 
 ## Storage
 
@@ -128,6 +164,12 @@ tako storages add uploads \
 
 Use `--access-key-id` and `--secret-access-key` for non-interactive runs; otherwise Tako prompts. `--force-path-style` signs path-style URLs. `--public-base-url` enables public storage image URLs through the SDK.
 
+## Provider Credentials And Backups
+
+Use `tako credentials set ssl.cloudflare --env production` for Cloudflare TLS and `tako credentials set postgres_url --env production` for shared channel/workflow state. Values are read from a prompt or stdin, encrypted locally, and never exposed as app secrets. `tako credentials list` lists configured credentials.
+
+Backups require a private S3 resource selected with `[envs.<env>].backup`. Use `tako backups now`, `list`, or `status` to inspect and create backups. `download <id>` saves an archive; `restore <id>` restores app data. Commands default to production; specify `--server` for multi-server download or restore.
+
 ## Code Generation
 
 ### `tako generate`
@@ -144,7 +186,7 @@ Generates:
 
 - **Typed secrets** — reads secret names from `.tako/secrets.json` and emits a `TakoSecrets` augmentation in `tako.d.ts` for `tako.secrets` from `tako.sh`.
 - **Typed storages** — reads storage binding names from `tako.toml` and emits a `TakoStorages` augmentation for `tako.storages`.
-- **Runtime types** — augments `tako.sh` with environment names, channel metadata, workflow metadata, and runtime env globals. App runtime values come from `tako.sh`.
+- **Runtime types** — augments `tako.sh` with environment names, channel metadata, workflow metadata, and user-defined env vars. App runtime values come from `tako.sh`.
 - **JS definition stubs** — when `<app_root>/channels/` or `<app_root>/workflows/` already exists, scaffolds `demo.ts` in empty dirs and adds missing default `defineChannel("<file-stem>")` or `defineWorkflow(...)` exports to files that do not have a default export yet. Existing explicit channel names are not rewritten.
 
 Workflow and channel payload types flow from their module types directly (no generated file needed for `.enqueue(payload)` or `.publish({type, data})`).
@@ -198,6 +240,8 @@ View remote logs.
 ```bash
 tako logs --tail
 tako logs --days 3
+tako logs --json          # history as one JSON object with a logs array
+tako logs --tail --json   # streaming JSONL records
 ```
 
 ## Servers
@@ -253,6 +297,7 @@ Uninstall Tako and remove all local data.
 | ------------------ | ------------------------------------------------- |
 | `--verbose` / `-v` | Verbose output (tracing log lines)                |
 | `--ci`             | Non-interactive, deterministic output (no colors) |
+| `--json`           | Structured stdout for agents and automation       |
 | `--dry-run`        | Show what would happen without side effects       |
 | `--config` / `-c`  | Use explicit config file instead of `./tako.toml` |
 

@@ -30,9 +30,9 @@ These sources win if this overview drifts.
 Tako has two control paths with different trust boundaries.
 
 - The management path handles deploys and operator commands. Local server control uses the management Unix socket. Remote management exposes the same operations through signed HTTP requests on the configured private management address.
-- The internal path is available only to Tako-managed app and worker processes. It handles workflow RPCs and server-side channel publishing. Each command carries its app identity and runtime token.
+- The internal path handles workflow RPCs and server-side channel publishing. Each command carries its app identity. The production Unix socket authenticates the connecting peer's Unix identity against that app; the bootstrap token authenticates internal HTTP probes, not these socket commands.
 
-The Unix transports use newline-delimited JSON. `tako-socket` caps one frame at 1 MiB. A client connects, writes one request, reads one response, and closes unless the owning API explicitly documents a stream.
+The Unix transports use newline-delimited JSON. `tako-socket` caps one frame at 1 MiB. A connection can carry successive request/response pairs; SDK clients may pool and reuse connections. Streaming responses are defined by the owning API.
 
 Management-only commands are rejected on the internal socket. Runtime-only commands are rejected on the management socket. Both paths share `tako_core::Command` so message shapes cannot drift between duplicate enums.
 

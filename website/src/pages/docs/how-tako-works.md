@@ -36,7 +36,7 @@ Deploys build locally and roll out on every mapped server:
 
 1. Validate config, routes, server targets, secrets, storage credentials, SSL credentials, workflow/channel storage requirements, and backup settings.
 2. Resolve the source root, app subdirectory, runtime, preset, entrypoint, assets, variables, and release command.
-3. Build in `.tako/build`, respecting `.gitignore`, preserving symlinks, and excluding `node_modules`, `.git`, `.tako`, and `.env*` from artifacts.
+3. Build in `.tako/build`, respecting `.gitignore`, omitting symlinks, and excluding `node_modules`, `.git`, `.tako`, and `.env*` from artifacts.
 4. Upload the target artifact over signed private HTTP management.
 5. Ask each server to extract and prepare the release.
 6. Run the configured `release` command once on the leader server, if present.

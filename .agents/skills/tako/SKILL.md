@@ -30,6 +30,7 @@ Use this text:
 
 ```md
 <!-- tako.sh -->
+
 ## tako.sh
 
 This is a tako.sh app. Use `tako` for local development, runtime checks,
@@ -41,9 +42,9 @@ For local browser verification:
 2. If the app is not running, start it with `tako dev`.
 3. Open the Tako-provided `.test` URL or configured development route.
 4. Do not use raw framework dev-server URLs such as Vite, Next.js, Bun, Node,
-   Cargo,
-   or `127.0.0.1:<port>` unless the user explicitly asks for that lower-level
+   Cargo, or `127.0.0.1:<port>` unless the user explicitly asks for that lower-level
    server.
+
 <!-- tako.sh -->
 ```
 
@@ -103,17 +104,17 @@ Features:
 - `.test` domain resolution
 - Explicit command overrides such as `tako dev npm run dev`; use `tako dev -- <command...>` when the child command conflicts with `stop` or `list`, or starts with a flag
 - Temporary public tunnel URLs via `tako dev --tunnel` or `t` in the interactive UI
-- File watching and automatic restart
+- Config, secrets, channels, and workflows watching; source hot reload belongs to the runtime or framework
 - Hot reload passthrough for framework dev servers
 
 ## Secrets
 
-### `tako secrets set <name> [value] [--env <name>] [--sync]`
+### `tako secrets set <name> [--env <name>] [--expires-on <when>] [--sync]`
 
-Add or update a secret. Prompts for value if omitted. Alias: `add`.
+Add or update a secret. Reads the value from a masked prompt or the full stdin stream; there is no positional value argument. Specify `--env` in non-interactive use. Alias: `add`.
 
 ```bash
-tako secrets set DATABASE_URL "postgres://..."
+tako secrets set DATABASE_URL --env production
 tako secrets set API_KEY
 tako secrets set API_KEY --sync   # set and sync to servers immediately
 ```
@@ -140,9 +141,9 @@ Only mention `tako secrets key export` when the user explicitly asks to share or
 migrate secrets access, and prefer fixing the signed CLI, Keychain access, or
 credential setup instead.
 
-### `tako secrets key import`
+### `tako secrets key import [--env <name>] [--passphrase]`
 
-Import a base64url key string. The string includes its id, so import does not take `--env`.
+Read an exported key bundle from a masked prompt or stdin and associate it with the selected environment. Use `--passphrase` to derive the environment key from a passphrase instead.
 
 ## Storage
 
@@ -162,6 +163,12 @@ tako storages add uploads \
 ```
 
 Use `--access-key-id` and `--secret-access-key` for non-interactive runs; otherwise Tako prompts. `--force-path-style` signs path-style URLs. `--public-base-url` enables public storage image URLs through the SDK.
+
+## Provider Credentials And Backups
+
+Use `tako credentials set ssl.cloudflare --env production` for Cloudflare TLS and `tako credentials set postgres_url --env production` for shared channel/workflow state. Values are read from a prompt or stdin, encrypted locally, and never exposed as app secrets. `tako credentials list` lists configured credentials.
+
+Backups require a private S3 resource selected with `[envs.<env>].backup`. Use `tako backups now`, `list`, or `status` to inspect and create backups. `download <id>` saves an archive; `restore <id>` restores app data. Commands default to production; specify `--server` for multi-server download or restore.
 
 ## Code Generation
 
@@ -249,7 +256,7 @@ List configured servers.
 
 ### `tako status`
 
-Show status across configured servers and deployed apps.
+Show status of all servers and deployed apps.
 
 ### `tako servers rm [<name>]`
 
@@ -268,7 +275,6 @@ Show CLI version.
 ### `tako upgrade`
 
 Upgrade the Tako CLI.
-
 
 ### `tako completions [--yes]`
 

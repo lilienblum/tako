@@ -21,6 +21,11 @@ Primary subcommands:
 - `logs`
 - `dev`
 - `doctor`
+- `status`
+- `run`
+- `credentials`
+- `completions`
+- `version`
 - `servers`
 - `secrets`
 - `storages`
@@ -54,7 +59,7 @@ Operational behavior highlights:
 - Container release builds use the app directory as the Podman build context. The configured container file and `.dockerignore` own production build inputs.
 - `tako deploy` caches target artifacts in `.tako/artifacts` and reuses verified cache hits when build inputs are unchanged; invalid cache entries are rebuilt automatically.
 - Local runtime version resolution runs `<tool> --version` directly, falling back to `latest`.
-- `tako deploy` merges build assets (preset assets + `build.assets`) into app `public/` after target build, in listed order.
+- `tako deploy` merges build assets (preset assets + top-level `assets`) into app `public/` after target build, in listed order.
 - `tako deploy` writes `app.json` in the deployed app directory and `tako-server` uses it to resolve the runtime start command.
 - `tako releases list` shows release/build history for the current app and environment with commit metadata when available.
 - `tako releases rollback <release-id>` rolls target servers back to a previous release id using the normal rolling-update path.
@@ -94,6 +99,6 @@ cargo run -p tako-cli --bin tako -- deploy --help
 
 ## Related Docs
 
-- `website/src/pages/docs/quickstart.md` (first-run local + remote setup)
+- `../website/src/pages/docs/quickstart.astro` (first-run local + remote setup)
 - `website/src/pages/docs/development.md` (local dev workflow)
 - `website/src/pages/docs/deployment.md` (remote deploy workflow)

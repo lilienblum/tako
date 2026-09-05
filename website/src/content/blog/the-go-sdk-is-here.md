@@ -49,7 +49,7 @@ tako.ListenAndServe(r)
 
 No adapters. No wrappers. No glue code. If your framework implements `http.Handler`, it works. Gin, Echo, Chi, gorilla/mux, plain `net/http` — pass it to `ListenAndServe` and Tako handles the rest.
 
-The one exception is Fiber, which uses fasthttp instead of `net/http`. For that, there's `tako.Listener()` — it returns a `net.Listener` you hand directly to Fiber's server.
+Fiber uses fasthttp instead of `net/http`. For custom server loops, `tako.Listener()` returns a bound `net.Listener` and reports readiness, but does not install HTTP protocol handling. The framework must handle authenticated internal status requests itself.
 
 ## Same Protocol, Same Guarantees
 
@@ -57,13 +57,13 @@ The Go SDK speaks the exact same [Tako protocol](/docs/how-tako-works/) as the J
 
 | Concern           | What the SDK does                                                        |
 | ----------------- | ------------------------------------------------------------------------ |
-| Readiness         | Signals `TAKO:READY:<port>` to stdout when the server is actually bound  |
+| Readiness         | Writes the bound port to fd 4 after the listener is ready                |
 | Health checks     | Intercepts `Host: <app>.tako` with `/status` endpoint automatically      |
 | Secrets           | Reads from fd 3 at init — before your code runs                          |
 | Graceful shutdown | Catches SIGTERM/SIGINT, drains in-flight requests for 10 seconds         |
 | Metadata          | `tako.InstanceID()`, `tako.Version()`, `tako.Uptime()` for observability |
 
-The server doesn't care whether the process behind the socket is Go, Bun, or Node. It just waits for `TAKO:READY`, probes `/status`, and routes traffic. One protocol, focused runtimes.
+The server doesn't care whether the process behind the socket is Go, Bun, or Node. It waits for the fd-4 port report, probes the authenticated internal `/status`, and routes traffic. One protocol, focused runtimes.
 
 ## Type-Safe Secrets
 
@@ -82,7 +82,7 @@ var Secrets = struct {
 
 Autocompletion in your editor. Compile-time errors if you typo a secret name. No more `os.Getenv("DATABSE_URL")` bugs that only surface in production.
 
-Secrets come from one place: the fd 3 bootstrap envelope Tako hands to your process at startup. The same `tako secret set …` values work in `tako dev` and `tako deploy`, with no environment-variable ambiguity.
+Secrets come from one place: the fd 3 bootstrap envelope Tako hands to your process at startup. The same `tako secrets set …` values work in `tako dev` and `tako deploy`, with no environment-variable ambiguity.
 
 ## Channels
 
@@ -105,6 +105,8 @@ tako.Channels.Register("chat", tako.ChannelDefinition{
   },
 })
 ```
+
+Params do not partition channel messages: every authorized binding to `chat` reads the same stream, regardless of `roomId`. Do not use this parameter as a room-isolation boundary.
 
 Typed params, per-channel auth callbacks, and transport selection are wired up through the same protocol the proxy already speaks. Clients connect to the exact channel name plus query params, for example `/_tako/channels/chat?roomId=lobby`.
 

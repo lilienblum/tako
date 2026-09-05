@@ -145,7 +145,7 @@ const avifUrl = imageUrl("https://cdn.example.com/uploads/avatars/u_123.png", {
 });
 ```
 
-The helper returns `/_tako/image?src=...&w=...` and is synchronous. Width must be one of `320, 640, 960, 1200, 1920`; quality is `1..100`; format is `webp` or `avif`. Omit `format` for the optimizer default; Tako defaults to WebP, and `format: "avif"` is only valid when the app's `[images].formats` allows AVIF. Local public paths are available by default. Remote URLs must match `[images].remote_patterns` in `tako.toml`. Sources may be JPEG, PNG, GIF, WebP, or AVIF; animated GIF and WebP sources keep animation for optimized resize and crop URLs when emitted as WebP. AVIF output is available for still images; animated sources that request AVIF fall back to WebP. The server verifies the app's configured image guardrails before fetching or transforming.
+The helper returns `/_tako/image?src=...&w=...` and is synchronous. Explicit URL quality values must also match `[images].qualities` (default `[75]`); SDK validation alone does not make a variant server-allowed. Width must be one of `320, 640, 960, 1200, 1920`; quality is `1..100`; format is `webp` or `avif`. Omit `format` for the optimizer default; Tako defaults to WebP, and `format: "avif"` is only valid when the app's `[images].formats` allows AVIF. Local public paths are available by default. Remote URLs must match `[images].remote_patterns` in `tako.toml`. Sources may be JPEG, PNG, GIF, WebP, or AVIF; animated GIF and WebP sources keep animation for optimized resize and crop URLs when emitted as WebP. AVIF output is available for still images; animated sources that request AVIF fall back to WebP. The server verifies the app's configured image guardrails before fetching or transforming.
 
 ## Storage
 
@@ -233,7 +233,7 @@ After this, server-side routes and server actions can call `defineWorkflow(...).
 ## Types
 
 ```typescript
-import type { FetchHandler, TakoStatus } from "tako.sh";
+import type { FetchHandler, TakoStatus } from "tako.sh/internal";
 
 // FetchHandler = (request: Request, env: Record<string, string>) => Response | Promise<Response>
 
@@ -285,12 +285,12 @@ export default defineChannel("chat", {
 ```
 
 - The first argument is the channel name. `defineChannel("chat")` maps to `/_tako/channels/chat`; generated files conventionally use the file stem as the initial name.
-- `paramsSchema` serializes to JSON Schema; tako-server validates query params before app auth.
+- `paramsSchema` serializes to JSON Schema; tako-server validates query params before app auth. Params do not partition stored messages or fanout: all authorized `roomId` bindings above receive the same `chat` stream. Never use params as a room or tenant isolation boundary.
 - `.$messageTypes<M>()` is a type-level narrower that declares the message map — runtime no-op. Omit for channels with no typed messages.
 - `auth` is optional. Omit or set `false` for public channels.
 - `transport: "ws"` enables WebSocket; the default is receive-only SSE. WebSocket frames are stored and broadcast as sent. Handle application mutations in your app's HTTP endpoints.
 - Every publish is stored before delivery. Messages are not claimed or removed when one subscriber receives them. `replayWindowMs` defaults to 10 minutes and can be overridden per channel.
-- Browser clients reconnect until explicitly closed. Network loss, laptop sleep, server restarts, and clean connection rotation are transient; the SDK retries with bounded backoff, wakes early on the browser `online` event, and resumes from the last received message id while it remains inside the replay window.
+- SSE subscriptions reconnect until closed. React `useChannel` reconnects WebSockets with the latest replay cursor. Lower-level `Channel.connect()` returns a single socket, so non-React callers must implement WebSocket reconnection.
 
 Auth return values: `false` deny · `true` allow anonymously · `{ subject }` allow with identity.
 
@@ -431,7 +431,7 @@ import { defineWorkflow } from "tako.sh";
 export default defineWorkflow<{ userId: string; to: string }>("send-email", {
   retries: 3, // retries after first attempt (default 2)
   schedule: "0 9 * * *", // cron: daily at 9am (5-field)
-  worker: "email", // metadata for SDK discovery; not production isolation yet
+  worker: "email", // worker group; omitted means "default"
   local: true, // optional per-server local storage/cron for multi-server deploys
   backoff: { base: 1_000, max: 3_600_000 }, // exponential backoff
   handler: async (payload, ctx) => {
@@ -448,7 +448,7 @@ export default defineWorkflow<{ userId: string; to: string }>("send-email", {
 });
 ```
 
-Use `local: true` only when per-server local queues and cron are acceptable. Until shared workflow storage is implemented, every workflow in a multi-server deploy must set `local: true`. Multi-server channel deploys are blocked until shared channel storage exists because publish/replay must reach subscribers connected to every server.
+Use `local: true` only when per-server local queues and cron are intentional. Multi-server workflows require the encrypted `postgres_url` credential unless every JavaScript workflow is local. Multi-server channels always require `postgres_url` so all servers share publish and replay state.
 
 ### Enqueuing
 
@@ -544,13 +544,13 @@ workers = 4
 
 ## Common Mistakes
 
-### 1. CRITICAL: Using the Vite plugin for non-SSR apps
+### 1. CRITICAL: Adding Vite to a plain fetch-handler app
 
 ```typescript
 // WRONG — plain fetch handler app doesn't need the Vite plugin
 // vite.config.ts with tako() plugin + src/index.ts with a fetch handler
 
-// CORRECT — the Vite plugin is only for SSR framework builds
+// CORRECT — omit Vite for a plain fetch-handler app; Vite dev servers need the plugin for readiness
 // For plain apps, just export a fetch handler and set main in tako.toml
 ```
 

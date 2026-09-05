@@ -17,7 +17,7 @@ Every Tako JS/TS project has a `tako.d.ts` managed by the CLI. App code does not
 import { tako } from "tako.sh";
 
 tako.secrets.DATABASE_URL; // typed string
-tako.env; // "development" | "production" | undefined
+tako.env; // configured environment union, including "development" and "production"
 tako.isDev; // boolean
 tako.port; // number, assigned by Tako
 tako.dataDir; // persistent path, survives deploys
@@ -35,19 +35,21 @@ await sendEmail.enqueue({ to });
 await chat({ roomId }).publish({ type: "msg", data: { text, userId } });
 ```
 
+Channel params are connection context, not room isolation: every authorized binding to the same channel name reads the same stream. See the [Channels reference](/docs/channels/#understand-channel-params) before publishing private events.
+
 Same shape on Bun and Node. No global install step, no kebab↔camel rule to remember.
 
 ## What `tako generate` generates
 
 [`tako generate`](/docs/cli/) scans your project and writes a single file:
 
-| Source                           | What `tako generate` emits                                                      |
-| -------------------------------- | ------------------------------------------------------------------------------- |
-| `.tako/secrets.json` (encrypted) | `interface TakoSecrets { readonly DATABASE_URL: string; ... }`                  |
-| `tako.toml` envs                 | <code>type Env = "development" \| "production" \| "staging"</code>              |
-| Channel files                    | `interface TakoChannels { ... }` metadata for discovered channel definitions    |
-| Workflow files                   | `interface TakoWorkflows { ... }` metadata for discovered workflow definitions  |
-| Runtime env                      | `process.env` / `import.meta.env` declarations for Tako-provided runtime values |
+| Source                           | What `tako generate` emits                                                     |
+| -------------------------------- | ------------------------------------------------------------------------------ |
+| `.tako/secrets.json` (encrypted) | `interface TakoSecrets { readonly DATABASE_URL: string; ... }`                 |
+| `tako.toml` envs                 | <code>type Env = "development" \| "production" \| "staging"</code>             |
+| Channel files                    | `interface TakoChannels { ... }` metadata for discovered channel definitions   |
+| Workflow files                   | `interface TakoWorkflows { ... }` metadata for discovered workflow definitions |
+| User vars                        | `process.env` / `import.meta.env` declarations for user-defined variables      |
 
 Secret names are plaintext in [`.tako/secrets.json`](/blog/secrets-without-env-files/) — the values aren't — so `tako generate` emits the type surface without ever touching your encryption key. When you add a secret with `tako secrets set`, `tako.d.ts` picks it up on the next `tako dev`, `tako deploy`, or `tako generate`.
 

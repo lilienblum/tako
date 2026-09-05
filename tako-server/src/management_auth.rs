@@ -275,6 +275,7 @@ mod tests {
     #[test]
     fn accept_nonce_rejects_replay_after_many_later_requests() {
         let state = ManagementAuthState::default();
+        // CodeQL[rust/hard-coded-cryptographic-value]: fixed nonce is a replay-test fixture, not a production nonce.
         let first_nonce = "nonce00000000001";
         state.accept_nonce(first_nonce, 1_000).unwrap();
 

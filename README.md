@@ -41,7 +41,7 @@ Set up a deployment host:
 
 ```bash
 # Connect the host and your workstation to Tailscale first.
-# The host installer bootstraps only; servers add starts and verifies it.
+# The host installer starts the service; servers add verifies access and saves it locally.
 sudo sh -c "$(curl -fsSL https://tako.sh/install-server.sh)"
 tako servers add my-server
 # Or install/repair over SSH while adding:
@@ -76,7 +76,7 @@ tako deploy
 - [Local Development](https://tako.sh/docs/development) — HTTPS, DNS, environment variables
 - [Deployment](https://tako.sh/docs/deployment) — deploy flow, rolling updates, rollbacks
 - [Troubleshooting](https://tako.sh/docs/troubleshooting) — common issues and fixes
-- [Examples](https://github.com/tako-sh/tako/tree/main/examples)
+- [Examples](https://github.com/tako-sh/tako/tree/master/examples)
 - [SDK](https://www.npmjs.com/package/tako.sh)
 - [Benchmarks](BENCHMARKS.md) — current TLDR and raw-data links
 - [Runtime Protocol](PROTOCOL.md) — contracts shared by the CLI, server, and SDKs
@@ -89,7 +89,7 @@ Install Tako skills for Codex, Claude Code, Cursor, and other skills.sh-compatib
 npx skills add tako-sh/tako
 ```
 
-Install a specific skill with `--skill tako`, `--skill tako-sdk-js`, or `--skill tako-sdk-go`.
+Install a specific skill with `--skill tako`, `--skill tako-sdk-js`, `--skill tako-sdk-go`, or `--skill tako-sdk-rust`.
 
 ## License
 

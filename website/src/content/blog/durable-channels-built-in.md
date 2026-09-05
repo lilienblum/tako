@@ -36,6 +36,8 @@ export default defineChannel("chat", {
 }).$messageTypes<ChatMessages>();
 ```
 
+Params do not partition replay or fanout. All authorized `roomId` bindings to `chat` read the same stream, so this example is not a private-room implementation.
+
 Typed params travel as query parameters, so clients connect to paths like `/_tako/channels/chat?roomId=lobby`. The verify callback runs inside your app, so it can touch your session store, database, feature flags, or whatever "is this user allowed" already means in your code.
 
 ```d2
@@ -57,7 +59,7 @@ proxy -> client: "SSE / WebSocket stream"
 
 "Durable" means published channel messages are stored before delivery and retained for a bounded replay window. The default window is 10 minutes, which is enough to bridge the cases that make realtime apps feel flaky: laptop sleep, mobile network handoff, browser reloads, clean connection rotation, and short server restarts.
 
-When a client reconnects with `Last-Event-ID` for SSE or `last_message_id` for WebSocket, the proxy replays everything it still has, in order, then hands off to the live tail. If a cursor is older than the replay window, the proxy returns `410 Gone` so the client can fall back to the app's normal data-loading flow instead of silently skipping events.
+When a client reconnects with `Last-Event-ID` for SSE or `last_message_id` for WebSocket, the proxy replays everything it still has, in order, then hands off to the live tail. If a cursor is older than the replay window, SSE returns `410 Gone` and WebSocket closes with code `4410` (`replay-too-old`) so the client can fall back to the app's normal data-loading flow instead of silently skipping events.
 
 Each channel has four lifecycle knobs:
 

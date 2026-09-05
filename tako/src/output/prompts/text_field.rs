@@ -270,6 +270,7 @@ impl<'a> TextField<'a> {
             if !self.footer_lines.is_empty() {
                 eprintln!();
                 for line in &self.footer_lines {
+                    // CodeQL[rust/cleartext-logging]: wizard footer completions already mask password values before reaching this renderer.
                     eprintln!("{line}");
                 }
             }

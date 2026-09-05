@@ -10,7 +10,7 @@ Enable the `axum` feature and serve your router through Tako:
 [dependencies]
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
-tako = { version = "0.1", features = ["axum"] }
+tako = { version = "0.2.1", features = ["axum"] }
 ```
 
 ```rust
@@ -29,7 +29,9 @@ fd 4, and handles Tako's internal `/status` probe.
 ## Custom Servers
 
 For frameworks that own the server loop, use `tako::std_listener()` or
-`tako::listener().await` with the `tokio` feature.
+`tako::listener().await` with the `tokio` feature. These helpers only bind and report readiness; they do not install HTTP status handling. For a custom Axum server loop, wrap the router with `tako::axum::router(app)`. Other frameworks must authenticate the internal status request and echo the token on a successful response.
+
+Run the SDK tests from the repository root with `cargo test -p tako --all-features`.
 
 Secrets are available through `tako::secret("NAME")` or
 `tako::bootstrap()?.secret("NAME")`. Native and container releases use the same

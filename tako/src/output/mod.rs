@@ -41,7 +41,7 @@ static JSON: AtomicBool = AtomicBool::new(false);
 static PHASE_PB: Mutex<Option<ProgressBar>> = Mutex::new(None);
 
 /// Print a line to stderr, routing through the active PhaseSpinner if one exists.
-// CodeQL[rust/cleartext-logging]: UI chrome only; password fields mask input with "•" before output
+// CodeQL[rust/cleartext-logging]: secret-command diagnostics expose names/expiry metadata, not secret values.
 fn emit(line: &str) {
     if let Some(pb) = PHASE_PB.lock().unwrap().as_ref() {
         pb.println(line);

@@ -14,7 +14,7 @@ import DocsLayout from "../../layouts/DocsLayout.astro";
   <p>Verify installation:</p>
   <Snippet code="tako --version" lang="bash" />
 
-  <p>If you install Tako another way and use signed image optimization locally on macOS:</p>
+  <p>If you install Tako another way and use image optimization locally on macOS:</p>
   <Snippet code="brew install vips" lang="bash" />
 
   <p>From your app directory:</p>
@@ -59,7 +59,7 @@ import DocsLayout from "../../layouts/DocsLayout.astro";
   </p>
 
   <p>Check remote access:</p>
-  <Snippet code="tako servers status" lang="bash" />
+  <Snippet code="tako status" lang="bash" />
 
   <p>Prefer installing from the host itself? Run the server installer as root, enter your workstation SSH public key when prompted, then add the host from your developer machine. The installer bootstraps the host and starts <code>tako-server</code>; <code>tako servers add</code> verifies access and saves it locally.</p>
   <Snippet code='sudo sh -c "$(curl -fsSL https://tako.sh/install-server.sh)"' lang="bash" />

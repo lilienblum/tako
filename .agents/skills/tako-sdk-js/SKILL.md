@@ -81,25 +81,25 @@ export default function fetch(request: Request) {
 
 ### Surface
 
-| Export          | Description                                                                 |
-| --------------- | --------------------------------------------------------------------------- |
+| Export          | Description                                                                        |
+| --------------- | ---------------------------------------------------------------------------------- |
 | `tako`          | Frozen runtime object with env, ports, paths, logger, secrets, storages, and cache |
-| `tako.env`      | `ENV` value (`"development"`, `"production"`, ...)                          |
-| `tako.isDev`    | `true` when `tako.env === "development"`                                    |
-| `tako.isProd`   | `true` when `tako.env === "production"`                                     |
-| `tako.port`     | Port assigned to this app instance                                          |
-| `tako.host`     | Host/address Tako bound this app instance to                                |
-| `tako.build`    | Build identifier (from `TAKO_BUILD`)                                        |
-| `tako.dataDir`  | Persistent app-owned data directory — writes survive restarts               |
-| `tako.appDir`   | Directory the app is running from (equivalent to `process.cwd()`)           |
-| `tako.secrets`  | Typed secret bag (interface regenerated from `.tako/secrets.json`)          |
-| `tako.storages` | Typed storage bag (interface regenerated from `tako.toml`)                  |
-| `tako.cache`    | SQLite-backed server-side key/value cache                                   |
-| `tako.logger`   | Structured JSON logger (`tako.logger.info(...)`)                            |
-| `Env`           | TypeScript union of configured environment names                            |
-| `TakoSecrets`   | TypeScript interface of secret names                                        |
-| `TakoStorages`  | TypeScript interface of storage names                                       |
-| `TakoRuntime`   | TypeScript type of the exported `tako` object                               |
+| `tako.env`      | `ENV` value (`"development"`, `"production"`, ...)                                 |
+| `tako.isDev`    | `true` when `tako.env === "development"`                                           |
+| `tako.isProd`   | `true` when `tako.env === "production"`                                            |
+| `tako.port`     | Port assigned to this app instance                                                 |
+| `tako.host`     | Host/address Tako bound this app instance to                                       |
+| `tako.build`    | Build identifier (from `TAKO_BUILD`)                                               |
+| `tako.dataDir`  | Persistent app-owned data directory — writes survive restarts                      |
+| `tako.appDir`   | Directory the app is running from (equivalent to `process.cwd()`)                  |
+| `tako.secrets`  | Typed secret bag (interface regenerated from `.tako/secrets.json`)                 |
+| `tako.storages` | Typed storage bag (interface regenerated from `tako.toml`)                         |
+| `tako.cache`    | SQLite-backed server-side key/value cache                                          |
+| `tako.logger`   | Structured JSON logger (`tako.logger.info(...)`)                                   |
+| `Env`           | TypeScript union of configured environment names                                   |
+| `TakoSecrets`   | TypeScript interface of secret names                                               |
+| `TakoStorages`  | TypeScript interface of storage names                                              |
+| `TakoRuntime`   | TypeScript type of the exported `tako` object                                      |
 
 ### Secrets
 
@@ -145,7 +145,7 @@ const avifUrl = imageUrl("https://cdn.example.com/uploads/avatars/u_123.png", {
 });
 ```
 
-The helper returns `/_tako/image?src=...&w=...` and is synchronous. Width must be one of `320, 640, 960, 1200, 1920`; quality is `1..100`; format is `webp` or `avif`. Omit `format` for the optimizer default; Tako defaults to WebP, and `format: "avif"` is only valid when the app's `[images].formats` allows AVIF. Local public paths are available by default. Remote URLs must match `[images].remote_patterns` in `tako.toml`. Sources may be JPEG, PNG, GIF, WebP, or AVIF; animated GIF and WebP sources keep animation for optimized resize and crop URLs when emitted as WebP. AVIF output is available for still images; animated sources that request AVIF fall back to WebP. The server verifies the app's configured image guardrails before fetching or transforming.
+The helper returns `/_tako/image?src=...&w=...` and is synchronous. Explicit URL quality values must also match `[images].qualities` (default `[75]`); SDK validation alone does not make a variant server-allowed. Width must be one of `320, 640, 960, 1200, 1920`; quality is `1..100`; format is `webp` or `avif`. Omit `format` for the optimizer default; Tako defaults to WebP, and `format: "avif"` is only valid when the app's `[images].formats` allows AVIF. Local public paths are available by default. Remote URLs must match `[images].remote_patterns` in `tako.toml`. Sources may be JPEG, PNG, GIF, WebP, or AVIF; animated GIF and WebP sources keep animation for optimized resize and crop URLs when emitted as WebP. AVIF output is available for still images; animated sources that request AVIF fall back to WebP. The server verifies the app's configured image guardrails before fetching or transforming.
 
 ## Storage
 
@@ -233,7 +233,7 @@ After this, server-side routes and server actions can call `defineWorkflow(...).
 ## Types
 
 ```typescript
-import type { FetchHandler, TakoStatus } from "tako.sh";
+import type { FetchHandler, TakoStatus } from "tako.sh/internal";
 
 // FetchHandler = (request: Request, env: Record<string, string>) => Response | Promise<Response>
 
@@ -285,12 +285,12 @@ export default defineChannel("chat", {
 ```
 
 - The first argument is the channel name. `defineChannel("chat")` maps to `/_tako/channels/chat`; generated files conventionally use the file stem as the initial name.
-- `paramsSchema` serializes to JSON Schema; tako-server validates query params before app auth.
+- `paramsSchema` serializes to JSON Schema; tako-server validates query params before app auth. Params do not partition stored messages or fanout: all authorized `roomId` bindings above receive the same `chat` stream. Never use params as a room or tenant isolation boundary.
 - `.$messageTypes<M>()` is a type-level narrower that declares the message map — runtime no-op. Omit for channels with no typed messages.
 - `auth` is optional. Omit or set `false` for public channels.
 - `transport: "ws"` enables WebSocket; the default is receive-only SSE. WebSocket frames are stored and broadcast as sent. Handle application mutations in your app's HTTP endpoints.
 - Every publish is stored before delivery. Messages are not claimed or removed when one subscriber receives them. `replayWindowMs` defaults to 10 minutes and can be overridden per channel.
-- Browser clients reconnect until explicitly closed. Network loss, laptop sleep, server restarts, and clean connection rotation are transient; the SDK retries with bounded backoff, wakes early on the browser `online` event, and resumes from the last received message id while it remains inside the replay window.
+- SSE subscriptions reconnect until closed. React `useChannel` reconnects WebSockets with the latest replay cursor. Lower-level `Channel.connect()` returns a single socket, so non-React callers must implement WebSocket reconnection.
 
 Auth return values: `false` deny · `true` allow anonymously · `{ subject }` allow with identity.
 
@@ -431,7 +431,8 @@ import { defineWorkflow } from "tako.sh";
 export default defineWorkflow<{ userId: string; to: string }>("send-email", {
   retries: 3, // retries after first attempt (default 2)
   schedule: "0 9 * * *", // cron: daily at 9am (5-field)
-  worker: "email", // optional worker group; omitted means "default"
+  worker: "email", // worker group; omitted means "default"
+  local: true, // optional per-server local storage/cron for multi-server deploys
   backoff: { base: 1_000, max: 3_600_000 }, // exponential backoff
   handler: async (payload, ctx) => {
     ctx.logger.info("send-email started");
@@ -446,6 +447,8 @@ export default defineWorkflow<{ userId: string; to: string }>("send-email", {
   },
 });
 ```
+
+Use `local: true` only when per-server local queues and cron are intentional. Multi-server workflows require the encrypted `postgres_url` credential unless every JavaScript workflow is local. Multi-server channels always require `postgres_url` so all servers share publish and replay state.
 
 ### Enqueuing
 
@@ -519,36 +522,35 @@ await signal("approval:order-abc", { approved: true });
 
 ### tako.toml configuration
 
-Production starts one scale-to-zero process per JavaScript worker group, selected by `worker: "name"`. Each process receives runtime concurrency (currently 500) and exits after 300 seconds idle. The configuration below is parsed but does not yet control production worker counts, concurrency, or per-server tuning.
+Production starts one scale-to-zero process per JavaScript worker group, selected by `worker: "name"`. Each process receives runtime concurrency (currently 500) and exits after 300 seconds idle. Worker counts, concurrency, and per-server overrides in `tako.toml` are parsed but not yet applied by production supervision.
 
 ```toml
-[workflows]                # base config inherited by every worker group
-workers = 1                # 0 = scale-to-zero (default)
+[workflows]                # parsed desired base settings
+workers = 1                # not applied by production supervision yet
 concurrency = 10
 
-[workflows.email]          # named worker-group override
+[workflows.email]          # parsed desired group override
 workers = 2
 
-[servers.lax.workflows]    # base override on one server
+[servers.lax.workflows]    # parsed desired server override
 concurrency = 20
 
 [servers.lax.workflows.email]
 workers = 4
 ```
 
-- `workers = 0` — scale-to-zero: worker spawned on first enqueue/cron tick, exits after 300s idle.
-- Parsed precedence (not yet applied by production supervision): `[servers.<name>.workflows.email]` > `[servers.<name>.workflows]` > `[workflows.email]` > `[workflows]` > defaults.
-- If `<app_root>/workflows/` exists but no workflow config exists, the app is implicitly scale-to-zero on every server.
+- The current production lane starts when runnable work appears and exits after 300 seconds idle.
+- The precedence model is parsed and tested, but it is not connected to production worker supervision.
 
 ## Common Mistakes
 
-### 1. CRITICAL: Using the Vite plugin for non-SSR apps
+### 1. CRITICAL: Adding Vite to a plain fetch-handler app
 
 ```typescript
 // WRONG — plain fetch handler app doesn't need the Vite plugin
 // vite.config.ts with tako() plugin + src/index.ts with a fetch handler
 
-// CORRECT — the Vite plugin is only for SSR framework builds
+// CORRECT — omit Vite for a plain fetch-handler app; Vite dev servers need the plugin for readiness
 // For plain apps, just export a fetch handler and set main in tako.toml
 ```
 

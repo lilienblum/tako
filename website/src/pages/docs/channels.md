@@ -140,7 +140,7 @@ const connection = events.connect({ authorization: token });
 For an SSE channel, omit the transport and call `subscribe()`:
 
 ```ts
-const updates = new Channel("order-updates", undefined, { accountId });
+const updates = new Channel("announcements", undefined, { clientVersion: "2.4.0" });
 const subscription = updates.subscribe({ authorization: token });
 ```
 

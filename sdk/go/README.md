@@ -1,5 +1,10 @@
 # Go workflow worker
 
+This module is imported as `github.com/tako-sh/tako/sdk/go` (package `tako`).
+It provides workflow registration, enqueue, signal, and worker APIs. The HTTP
+SDK is the separate root module `tako.sh`; use its `ListenAndServe`, `Listener`,
+and `GetSecret` helpers for HTTP apps.
+
 Register workflow handlers before calling `RunWorker(ctx)`. The worker reads
 `TAKO_WORKER_CONCURRENCY` (default 500) and runs at most that many handlers
 concurrently. Cancellation stops new claims and waits for active handlers to

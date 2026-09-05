@@ -35,6 +35,7 @@ async fn deploy_rejects_invalid_app_name() {
     let Response::Error { message } = response else {
         panic!("expected invalid app name to be rejected");
     };
+    // CodeQL[rust/cleartext-logging]: this isolated deploy fixture supplies no app secrets; assertions print test responses.
     assert!(message.contains("Invalid app name"), "got: {message}");
 }
 
@@ -167,6 +168,7 @@ async fn failed_deploy_does_not_persist_ssl_credentials() {
     let Response::Error { message } = response else {
         panic!("expected invalid release to be rejected");
     };
+    // CodeQL[rust/cleartext-logging]: this isolated deploy fixture supplies no app secrets; assertions print test responses.
     assert!(message.contains("empty main field"), "got: {message}");
     assert_eq!(state.state_store.get_ssl(app_id).unwrap(), None);
 }
@@ -208,6 +210,7 @@ async fn deploy_rejects_release_path_outside_managed_root() {
     let Response::Error { message } = response else {
         panic!("expected out-of-root deploy path to be rejected");
     };
+    // CodeQL[rust/cleartext-logging]: this isolated deploy fixture supplies no app secrets; assertions print test responses.
     assert!(
         message.contains("Invalid release path"),
         "expected path validation error, got: {message}"
@@ -256,6 +259,7 @@ async fn deploy_rejects_invalid_release_version() {
     let Response::Error { message } = response else {
         panic!("expected invalid release version to be rejected");
     };
+    // CodeQL[rust/cleartext-logging]: this isolated deploy fixture supplies no app secrets; assertions print test responses.
     assert!(
         message.contains("Invalid release version"),
         "got: {message}"
@@ -309,8 +313,10 @@ async fn deploy_rejects_protocol_mismatch_before_registering_app() {
         .await;
 
     let Response::Error { message } = response else {
+        // CodeQL[rust/cleartext-logging]: this isolated deploy fixture supplies no app secrets; assertions print test responses.
         panic!("expected protocol mismatch, got: {response:?}");
     };
+    // CodeQL[rust/cleartext-logging]: this isolated deploy fixture supplies no app secrets; assertions print test responses.
     assert!(
         message.contains("Protocol version mismatch"),
         "got: {message}"

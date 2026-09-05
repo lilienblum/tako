@@ -5,7 +5,7 @@ description: >-
   Tako internal status handling.
 type: framework
 library: tako.sh
-library_version: "0.1.0"
+library_version: "0.2.1"
 sources:
   - tako-sh/tako:sdk/rust
 ---
@@ -23,7 +23,7 @@ bind from `PORT` or implement `/status`; the SDK owns the runtime contract.
 [dependencies]
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
-tako = { version = "0.1", features = ["axum"] }
+tako = { version = "0.2.1", features = ["axum"] }
 ```
 
 ```rust
@@ -39,7 +39,7 @@ async fn main() -> std::io::Result<()> {
 ## Custom Servers
 
 Use `tako::std_listener()` or `tako::listener().await` with the `tokio` feature
-when a framework owns its server loop.
+when a framework owns its server loop. These helpers report readiness but do not wrap HTTP requests. For a custom Axum loop, use `tako::axum::router(app)` to retain internal status authentication. Other frameworks need their own authenticated status handler.
 
 Secrets are available through `tako::secret("NAME")` or
 `tako::bootstrap()?.secret("NAME")`.

@@ -287,6 +287,7 @@ async fn deploy_on_demand_validates_startup_and_fails_for_unhealthy_build() {
         })
         .await;
 
+    // CodeQL[rust/cleartext-logging]: this isolated lifecycle fixture has no app secrets; only test responses are printed.
     assert!(
         matches!(response, Response::Error { .. }),
         "expected startup validation failure for on-demand deploy: {response:?}"
@@ -450,6 +451,7 @@ HTTPServer(("127.0.0.1", port), Handler).serve_forever()
             force: false,
         })
         .await;
+    // CodeQL[rust/cleartext-logging]: this isolated lifecycle fixture has no app secrets; only test responses are printed.
     assert!(
         matches!(response, Response::Ok { .. }),
         "expected successful on-demand deploy: {response:?}"
@@ -622,6 +624,7 @@ async fn status_includes_running_builds_for_each_version() {
         .iter()
         .filter_map(|b| b.get("version").and_then(Value::as_str))
         .collect();
+    // CodeQL[rust/cleartext-logging]: this isolated lifecycle fixture has no app secrets; only test responses are printed.
     assert!(
         versions.contains(&"v1") && versions.contains(&"v2"),
         "expected status to include both running builds: {data}"
