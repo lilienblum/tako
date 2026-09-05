@@ -1,4 +1,5 @@
 use super::*;
+use crate::isolation::fixture::TestDataDir as TempDir;
 
 #[tokio::test]
 async fn deploy_rejects_invalid_app_name() {

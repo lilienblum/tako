@@ -1,4 +1,5 @@
 use super::*;
+use crate::isolation::fixture::TestDataDir as TempDir;
 
 // CodeQL[rust/cleartext-logging]: hardcoded fixture secrets in tests; set_secrets encrypts at rest and update_secrets logs only app name.
 #[tokio::test]

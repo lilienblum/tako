@@ -1,5 +1,5 @@
 use super::*;
-use tempfile::TempDir;
+use crate::isolation::fixture::TestDataDir as TempDir;
 
 #[test]
 #[cfg(unix)]
@@ -37,7 +37,7 @@ fn app_runtime_data_paths_use_nested_app_and_tako_dirs() {
 #[test]
 fn ensure_app_runtime_data_dirs_creates_both_directories() {
     let temp = TempDir::new().unwrap();
-    let paths = ensure_app_runtime_data_dirs(temp.path(), "my-app").unwrap();
+    let paths = ensure_app_runtime_data_dirs(temp.path(), "my-app/production").unwrap();
     assert!(paths.app.is_dir());
     assert!(paths.tako.is_dir());
 }
@@ -52,9 +52,16 @@ fn mode(path: &Path) -> u32 {
 #[cfg(unix)]
 fn ensure_app_runtime_data_dirs_makes_app_data_group_writable() {
     let temp = TempDir::new().unwrap();
-    let paths = ensure_app_runtime_data_dirs(temp.path(), "my-app").unwrap();
+    let paths = ensure_app_runtime_data_dirs(temp.path(), "my-app/production").unwrap();
 
-    assert_eq!(mode(&paths.root), 0o710);
+    assert_eq!(
+        mode(&paths.root),
+        if cfg!(target_os = "linux") {
+            0o750
+        } else {
+            0o710
+        }
+    );
     assert_eq!(mode(&paths.app), 0o2770);
     assert_eq!(mode(&paths.tako), 0o700);
 }
@@ -65,7 +72,7 @@ fn ensure_app_runtime_data_dirs_repairs_existing_app_data_files() {
     use std::os::unix::fs::PermissionsExt;
 
     let temp = TempDir::new().unwrap();
-    let paths = app_runtime_data_paths(temp.path(), "my-app");
+    let paths = app_runtime_data_paths(temp.path(), "my-app/production");
     std::fs::create_dir_all(&paths.app).unwrap();
     std::fs::create_dir_all(&paths.tako).unwrap();
     let db_path = paths.app.join("mission.sqlite");
@@ -75,7 +82,7 @@ fn ensure_app_runtime_data_dirs_repairs_existing_app_data_files() {
     std::fs::set_permissions(&db_path, std::fs::Permissions::from_mode(0o644)).unwrap();
     std::fs::set_permissions(&wal_path, std::fs::Permissions::from_mode(0o600)).unwrap();
 
-    ensure_app_runtime_data_dirs(temp.path(), "my-app").unwrap();
+    ensure_app_runtime_data_dirs(temp.path(), "my-app/production").unwrap();
 
     assert_eq!(mode(&db_path) & 0o660, 0o660);
     assert_eq!(mode(&wal_path) & 0o660, 0o660);

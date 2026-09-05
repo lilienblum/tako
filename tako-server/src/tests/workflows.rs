@@ -1,4 +1,5 @@
 use super::*;
+use crate::isolation::fixture::TestDataDir as TempDir;
 
 #[tokio::test]
 async fn sync_app_workflows_restarts_existing_entry_and_stops_removed_workflows() {

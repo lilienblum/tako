@@ -1,4 +1,5 @@
 use super::*;
+use crate::isolation::fixture::TestDataDir as TempDir;
 
 #[tokio::test]
 async fn scale_command_rejects_instances_above_app_limit() {
@@ -17,7 +18,7 @@ async fn scale_command_rejects_instances_above_app_limit() {
     .unwrap();
 
     let app = state.app_manager.register_app(AppConfig {
-        name: "my-app".to_string(),
+        name: "my-app/production".to_string(),
         version: "v1".to_string(),
         min_instances: 1,
         max_instances: 4,
@@ -26,7 +27,7 @@ async fn scale_command_rejects_instances_above_app_limit() {
 
     let response = state
         .handle_command(Command::Scale {
-            app: "my-app".to_string(),
+            app: "my-app/production".to_string(),
             instances: 100,
         })
         .await;
@@ -64,7 +65,7 @@ async fn standby_scale_still_caps_before_app_limit() {
     .unwrap();
 
     let app = state.app_manager.register_app(AppConfig {
-        name: "my-app".to_string(),
+        name: "my-app/production".to_string(),
         version: "v1".to_string(),
         min_instances: 1,
         max_instances: 4,
@@ -75,7 +76,7 @@ async fn standby_scale_still_caps_before_app_limit() {
 
     let response = state
         .handle_command(Command::Scale {
-            app: "my-app".to_string(),
+            app: "my-app/production".to_string(),
             instances: 100,
         })
         .await;
@@ -106,7 +107,7 @@ async fn deploy_rejects_persisted_instances_above_app_limit() {
     let current_release = temp
         .path()
         .join("apps")
-        .join("my-app")
+        .join("my-app/production")
         .join("releases")
         .join("v1");
     std::fs::create_dir_all(&current_release).unwrap();
@@ -120,7 +121,7 @@ async fn deploy_rejects_persisted_instances_above_app_limit() {
     );
 
     let app = state.app_manager.register_app(AppConfig {
-        name: "my-app".to_string(),
+        name: "my-app/production".to_string(),
         version: "v1".to_string(),
         path: current_release,
         command: vec![
@@ -137,7 +138,7 @@ async fn deploy_rejects_persisted_instances_above_app_limit() {
     let next_release = temp
         .path()
         .join("apps")
-        .join("my-app")
+        .join("my-app/production")
         .join("releases")
         .join("v2");
     std::fs::create_dir_all(&next_release).unwrap();
@@ -152,7 +153,7 @@ async fn deploy_rejects_persisted_instances_above_app_limit() {
 
     let response = state
         .handle_command(Command::Deploy {
-            app: "my-app".to_string(),
+            app: "my-app/production".to_string(),
             version: "v2".to_string(),
             path: next_release.to_string_lossy().to_string(),
             routes: vec!["api.example.com".to_string()],
@@ -193,7 +194,7 @@ async fn restore_clamps_instances_above_app_limit() {
     let release_dir = temp
         .path()
         .join("apps")
-        .join("my-app")
+        .join("my-app/production")
         .join("releases")
         .join("v1");
     std::fs::create_dir_all(&release_dir).unwrap();
@@ -206,7 +207,7 @@ async fn restore_clamps_instances_above_app_limit() {
         300,
     );
     let config = AppConfig {
-        name: "my-app".to_string(),
+        name: "my-app/production".to_string(),
         version: "v1".to_string(),
         path: release_dir,
         min_instances: 100,
@@ -229,7 +230,10 @@ async fn restore_clamps_instances_above_app_limit() {
     .unwrap();
     state_b.restore_from_state_store().await.unwrap();
 
-    let restored = state_b.app_manager.get_app("my-app").expect("app restored");
+    let restored = state_b
+        .app_manager
+        .get_app("my-app/production")
+        .expect("app restored");
     assert_eq!(
         restored.config.read().min_instances,
         crate::instances::effective_instance_limit(4)

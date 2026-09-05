@@ -1,4 +1,5 @@
 use super::*;
+use crate::isolation::fixture::TestDataDir as TempDir;
 
 #[tokio::test]
 async fn get_secrets_hash_returns_hash_of_app_secrets() {

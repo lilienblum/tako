@@ -81,7 +81,6 @@ fn check_service_context(
 #[cfg(target_os = "linux")]
 pub(super) fn request(data_dir: &Path, app: &str, release: Option<&Path>) -> Result<(), String> {
     app_components(app)?;
-    validate_service_context(data_dir)?;
     let version = release
         .map(|path| {
             let version = path
@@ -101,6 +100,22 @@ pub(super) fn request(data_dir: &Path, app: &str, release: Option<&Path>) -> Res
             Ok::<_, String>(version)
         })
         .transpose()?;
+    #[cfg(test)]
+    if super::fixture::contains(data_dir) {
+        std::fs::create_dir_all(data_dir.join("apps").join(app)).map_err(|e| e.to_string())?;
+        return prepare_filesystem(
+            data_dir,
+            app,
+            version,
+            unsafe { libc::geteuid() },
+            &tako_spawn::UserIds {
+                uid: unsafe { libc::geteuid() },
+                gid: unsafe { libc::getegid() },
+                supplementary_gids: Vec::new(),
+            },
+        );
+    }
+    validate_service_context(data_dir)?;
     let mut command = std::process::Command::new("/usr/bin/sudo");
     command
         .env_clear()
@@ -129,7 +144,7 @@ pub(crate) fn run_helper(args: &[String]) -> Result<(), String> {
     if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
         return Err(io::Error::last_os_error().to_string());
     }
-    let (name, environment) = app_components(&args[0])?;
+    app_components(&args[0])?;
     if let Some(version) = args.get(1) {
         component(version)?;
     }
@@ -149,34 +164,44 @@ pub(crate) fn run_helper(args: &[String]) -> Result<(), String> {
             "prepare cgroup v2 limits (requires writable cpu, memory and pids controllers): {e}"
         )
     })?;
-    let root = open_absolute(Path::new(&root)).map_err(|e| e.to_string())?;
+    prepare_filesystem(
+        Path::new(&root),
+        &args[0],
+        args.get(1).map(String::as_str),
+        service_uid,
+        &identity.ids,
+    )
+}
+
+fn prepare_filesystem(
+    root: &Path,
+    app: &str,
+    version: Option<&str>,
+    service_uid: u32,
+    ids: &tako_spawn::UserIds,
+) -> Result<(), String> {
+    let (name, environment) = app_components(app)?;
+    let root = open_absolute(root).map_err(|e| e.to_string())?;
     let apps = open_child(&root, "apps", true).map_err(|e| e.to_string())?;
     let name = open_child(&apps, name, true).map_err(|e| e.to_string())?;
     let app = open_child(&name, environment, true).map_err(|e| e.to_string())?;
-    set_owner_mode(&app, service_uid, identity.ids.gid, 0o750).map_err(|e| e.to_string())?;
+    set_owner_mode(&app, service_uid, ids.gid, 0o750).map_err(|e| e.to_string())?;
     for directory in ["releases", "shared", "data"] {
         let dir = ensure_directory(&app, directory).map_err(|e| e.to_string())?;
-        set_owner_mode(&dir, service_uid, identity.ids.gid, 0o750).map_err(|e| e.to_string())?;
+        set_owner_mode(&dir, service_uid, ids.gid, 0o750).map_err(|e| e.to_string())?;
     }
     let data = open_child(&app, "data", true).map_err(|e| e.to_string())?;
     let writable = ensure_directory(&data, "app").map_err(|e| e.to_string())?;
-    secure_data_tree(&writable, service_uid, identity.ids.gid, false).map_err(|e| e.to_string())?;
+    secure_data_tree(&writable, service_uid, ids.gid, false).map_err(|e| e.to_string())?;
     let private = ensure_directory(&data, "tako").map_err(|e| e.to_string())?;
-    secure_data_tree(&private, service_uid, identity.ids.gid, true).map_err(|e| e.to_string())?;
+    secure_data_tree(&private, service_uid, ids.gid, true).map_err(|e| e.to_string())?;
     let shared = open_child(&app, "shared", true).map_err(|e| e.to_string())?;
     let logs = ensure_directory(&shared, "logs").map_err(|e| e.to_string())?;
-    secure_data_tree(&logs, service_uid, identity.ids.gid, false).map_err(|e| e.to_string())?;
-    if let Some(version) = args.get(1) {
+    secure_data_tree(&logs, service_uid, ids.gid, false).map_err(|e| e.to_string())?;
+    if let Some(version) = version {
         let releases = open_child(&app, "releases", true).map_err(|e| e.to_string())?;
         let release = open_child(&releases, version, true).map_err(|e| e.to_string())?;
-        secure_release(
-            &release,
-            service_uid,
-            identity.ids.gid,
-            identity.ids.uid,
-            true,
-        )
-        .map_err(|e| e.to_string())?;
+        secure_release(&release, service_uid, ids.gid, ids.uid, true).map_err(|e| e.to_string())?;
     }
     Ok(())
 }

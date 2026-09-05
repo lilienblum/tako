@@ -3,6 +3,8 @@ use std::path::Path;
 use sha2::{Digest, Sha256};
 use tako_spawn::{CgroupAssignment, ProcessIsolation, UserIds};
 
+#[cfg(test)]
+pub(crate) mod fixture;
 #[cfg(any(target_os = "linux", test))]
 mod provision;
 #[cfg(target_os = "linux")]
@@ -53,6 +55,17 @@ pub(crate) fn app_process_isolation(
     data_dir: &Path,
     app_id: &str,
 ) -> Result<ProcessIsolation, String> {
+    #[cfg(all(test, target_os = "linux"))]
+    if fixture::contains(data_dir) {
+        return Ok(ProcessIsolation {
+            parent_death_signal: app_child_parent_death_signal(),
+            resource_limits: tako_spawn::ResourceLimits {
+                address_space_bytes: None,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+    }
     let mut isolation = ProcessIsolation {
         parent_death_signal: app_child_parent_death_signal(),
         ..ProcessIsolation::default()
@@ -101,6 +114,12 @@ pub(crate) fn prepare_app_filesystem_isolation(
     data_paths: &crate::release::AppRuntimeDataPaths,
 ) -> Result<Option<AppUnixIdentity>, String> {
     prepare_app_directory_modes(data_dir, app_id, data_paths, release_path)?;
+
+    #[cfg(all(test, target_os = "linux"))]
+    if fixture::contains(data_dir) {
+        provision::request(data_dir, app_id, release_path)?;
+        return Ok(None);
+    }
 
     if cfg!(not(target_os = "linux")) && !crate::unix::is_root() {
         return Ok(None);

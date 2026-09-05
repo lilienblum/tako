@@ -1,4 +1,5 @@
 use super::*;
+use crate::isolation::fixture::TestDataDir as TempDir;
 
 #[tokio::test]
 async fn scale_command_persists_zero_instances_across_restore() {
@@ -18,7 +19,7 @@ async fn scale_command_persists_zero_instances_across_restore() {
     let release_dir = temp
         .path()
         .join("apps")
-        .join("my-app")
+        .join("my-app/production")
         .join("releases")
         .join("v1");
     std::fs::create_dir_all(&release_dir).unwrap();
@@ -29,7 +30,7 @@ async fn scale_command_persists_zero_instances_across_restore() {
     .unwrap();
 
     let app = state_a.app_manager.register_app(AppConfig {
-        name: "my-app".to_string(),
+        name: "my-app/production".to_string(),
         version: "v1".to_string(),
         path: release_dir.clone(),
         command: vec![
@@ -45,7 +46,10 @@ async fn scale_command_persists_zero_instances_across_restore() {
     state_a.load_balancer.register_app(app.clone());
     {
         let mut route_table = state_a.routes.write();
-        route_table.set_app_routes("my-app".to_string(), vec!["api.example.com".to_string()]);
+        route_table.set_app_routes(
+            "my-app/production".to_string(),
+            vec!["api.example.com".to_string()],
+        );
     }
 
     let first = app.allocate_instance();
@@ -55,7 +59,7 @@ async fn scale_command_persists_zero_instances_across_restore() {
 
     let response = state_a
         .handle_command(Command::Scale {
-            app: "my-app".to_string(),
+            app: "my-app/production".to_string(),
             instances: 0,
         })
         .await;
@@ -74,7 +78,10 @@ async fn scale_command_persists_zero_instances_across_restore() {
     .unwrap();
     state_b.restore_from_state_store().await.unwrap();
 
-    let restored = state_b.app_manager.get_app("my-app").expect("app restored");
+    let restored = state_b
+        .app_manager
+        .get_app("my-app/production")
+        .expect("app restored");
     assert_eq!(restored.config.read().min_instances, 0);
     assert_eq!(restored.state(), AppState::Idle);
 }
@@ -97,7 +104,7 @@ async fn deploy_preserves_scaled_instance_count() {
     let current_release = temp
         .path()
         .join("apps")
-        .join("my-app")
+        .join("my-app/production")
         .join("releases")
         .join("v1");
     std::fs::create_dir_all(&current_release).unwrap();
@@ -108,7 +115,7 @@ async fn deploy_preserves_scaled_instance_count() {
     .unwrap();
 
     let app = state.app_manager.register_app(AppConfig {
-        name: "my-app".to_string(),
+        name: "my-app/production".to_string(),
         version: "v1".to_string(),
         path: current_release.clone(),
         command: vec![
@@ -124,7 +131,10 @@ async fn deploy_preserves_scaled_instance_count() {
     state.load_balancer.register_app(app.clone());
     {
         let mut route_table = state.routes.write();
-        route_table.set_app_routes("my-app".to_string(), vec!["api.example.com".to_string()]);
+        route_table.set_app_routes(
+            "my-app/production".to_string(),
+            vec!["api.example.com".to_string()],
+        );
     }
 
     let old_instance = app.allocate_instance();
@@ -133,7 +143,7 @@ async fn deploy_preserves_scaled_instance_count() {
     let broken_release = temp
         .path()
         .join("apps")
-        .join("my-app")
+        .join("my-app/production")
         .join("releases")
         .join("v2");
     std::fs::create_dir_all(&broken_release).unwrap();
@@ -145,7 +155,7 @@ async fn deploy_preserves_scaled_instance_count() {
 
     let response = state
         .handle_command(Command::Deploy {
-            app: "my-app".to_string(),
+            app: "my-app/production".to_string(),
             version: "v2".to_string(),
             path: broken_release.to_string_lossy().to_string(),
             routes: vec!["api.example.com".to_string()],
@@ -181,7 +191,7 @@ async fn delete_command_removes_persisted_state_for_next_boot() {
     let release_dir = temp
         .path()
         .join("apps")
-        .join("my-app")
+        .join("my-app/production")
         .join("releases")
         .join("v1");
     std::fs::create_dir_all(&release_dir).unwrap();
@@ -194,7 +204,7 @@ async fn delete_command_removes_persisted_state_for_next_boot() {
         300,
     );
     let app = state_a.app_manager.register_app(AppConfig {
-        name: "my-app".to_string(),
+        name: "my-app/production".to_string(),
         version: "v1".to_string(),
         path: release_dir.clone(),
         command: vec![
@@ -578,7 +588,7 @@ async fn status_includes_running_builds_for_each_version() {
     .unwrap();
 
     let app = state.app_manager.register_app(AppConfig {
-        name: "my-app".to_string(),
+        name: "my-app/production".to_string(),
         version: "v1".to_string(),
         min_instances: 0,
         ..Default::default()
@@ -596,7 +606,7 @@ async fn status_includes_running_builds_for_each_version() {
 
     let response = state
         .handle_command(Command::Status {
-            app: "my-app".to_string(),
+            app: "my-app/production".to_string(),
         })
         .await;
 

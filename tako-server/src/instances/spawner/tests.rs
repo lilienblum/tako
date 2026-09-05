@@ -73,7 +73,7 @@ async fn service_spawner_executes_app_in_its_cgroup() {
 
 #[tokio::test]
 async fn bootstrap_backpressure_respects_startup_timeout() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::isolation::fixture::TestDataDir::new().unwrap();
     let (tx, _rx) = mpsc::channel(4);
     let app = App::new(
         AppConfig {
@@ -91,7 +91,9 @@ async fn bootstrap_backpressure_respects_startup_timeout() {
     let instance = app.allocate_instance();
     let result = tokio::time::timeout(
         Duration::from_secs(3),
-        Spawner::new().spawn(&app, instance.clone()),
+        Spawner::new()
+            .with_data_dir(dir.path().to_path_buf())
+            .spawn(&app, instance.clone()),
     )
     .await
     .expect("bootstrap blocked the async runtime");
@@ -110,11 +112,8 @@ fn test_spawner_creation() {
 
 #[test]
 #[cfg(unix)]
-fn app_process_isolation_uses_current_user_when_not_root() {
-    let temp = tempfile::tempdir().unwrap();
-    if crate::unix::is_root() {
-        return;
-    }
+fn explicit_process_fixture_uses_current_user() {
+    let temp = crate::isolation::fixture::TestDataDir::new().unwrap();
 
     let isolation =
         crate::isolation::app_process_isolation(temp.path(), "demo/production").unwrap();
@@ -243,7 +242,7 @@ fn truncate_chars_adds_ellipsis_when_over_limit() {
 
 #[tokio::test]
 async fn spawn_timeout_reports_startup_timeout() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::isolation::fixture::TestDataDir::new().unwrap();
     let (instance_tx, _instance_rx) = mpsc::channel(4);
     let app = App::new(
         AppConfig {
@@ -261,12 +260,12 @@ async fn spawn_timeout_reports_startup_timeout() {
         noop_log_handle(),
     );
 
-    let spawner = Spawner::new();
+    let spawner = Spawner::new().with_data_dir(dir.path().to_path_buf());
     let instance = app.allocate_instance();
     let err = spawner.spawn(&app, instance).await.unwrap_err();
 
     let message = err.to_string();
-    assert!(message.contains("Instance startup timeout"));
+    assert!(message.contains("Instance startup timeout"), "{message}");
 }
 
 #[test]

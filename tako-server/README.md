@@ -59,6 +59,13 @@ cargo run -p tako-server -- --help
 cargo test -p tako-server
 ```
 
+Behavior tests use `isolation::fixture::TestDataDir` to opt a temporary data root into
+local-account provisioning. They exercise the real filesystem permission walkers;
+unregistered roots still require the installed Linux isolation configuration.
+Account switching and cgroup limits are covered by the installed isolation tests.
+When running the test executable directly in Docker, use `--init` so its children
+do not mistake a PID 1 test runner for an exited parent.
+
 Example local run:
 
 ```bash
