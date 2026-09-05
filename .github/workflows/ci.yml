@@ -18,6 +18,30 @@ env:
   BUN_VERSION: 1.4.0
 
 jobs:
+  alma-fixture:
+    name: AlmaLinux fixture
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Verify fixture sudo account
+        run: |
+          docker build -f e2e/docker/server/alma.Dockerfile -t tako-alma-fixture .
+          docker run --rm --privileged tako-alma-fixture sh -c '
+            echo "tako:tako-e2e" | chpasswd
+            if su -s /bin/sh tako -c "sudo -n -l"; then exit 0; fi
+            passwd -S tako
+            pwck -r
+            authselect current
+            authselect check
+            cat /etc/pam.d/sudo /etc/pam.d/system-auth /etc/nsswitch.conf
+            dnf install -y strace
+            strace -f -e trace=file,process,setuid,setreuid,setresuid,capget,capset su -s /bin/sh tako -c "sudo -n -l"
+            exit 1
+          '
+
   detect-changes:
     name: Detect changes
     runs-on: ubuntu-latest
