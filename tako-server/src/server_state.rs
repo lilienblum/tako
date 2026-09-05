@@ -226,6 +226,12 @@ impl ServerState {
                 parking_lot::RwLock::new(HashMap::new());
             workflows.set_channel_publisher(std::sync::Arc::new(
                 move |app: &str, channel: &str, payload: serde_json::Value| {
+                    let lifecycle = payload
+                        .get("lifecycle")
+                        .cloned()
+                        .map(serde_json::from_value::<tako_channels::ChannelLifecycle>)
+                        .transpose()
+                        .map_err(|e| format!("invalid channel lifecycle: {e}"))?;
                     let typed: tako_channels::ChannelPublishPayload =
                         serde_json::from_value(payload)
                             .map_err(|e| format!("invalid payload: {e}"))?;
@@ -255,6 +261,23 @@ impl ServerState {
                         }
                     };
 
+                    if let Some(lifecycle) = lifecycle {
+                        store
+                            .sync_channel(
+                                channel,
+                                &tako_channels::ChannelAuthResponse {
+                                    ok: true,
+                                    subject: None,
+                                    transport: None,
+                                    replay_window_ms: lifecycle.replay_window_ms,
+                                    inactivity_ttl_ms: lifecycle.inactivity_ttl_ms,
+                                    keepalive_interval_ms: lifecycle.keepalive_interval_ms,
+                                    max_connection_lifetime_ms: lifecycle
+                                        .max_connection_lifetime_ms,
+                                },
+                            )
+                            .map_err(|e| e.to_string())?;
+                    }
                     store
                         .append(channel, &typed)
                         .map(|msg| serde_json::to_value(msg).unwrap_or(serde_json::Value::Null))

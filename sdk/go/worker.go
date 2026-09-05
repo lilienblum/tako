@@ -8,6 +8,7 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -241,7 +242,6 @@ type workflowRegistration struct {
 
 type workflowConfig struct {
 	maxAttempts uint32
-	timeoutMs   uint32
 	schedule    string
 	backoffBase time.Duration
 	backoffMax  time.Duration
@@ -293,7 +293,8 @@ func RegisterWorkflow(name string, h Handler, opts ...WorkflowOption) {
 }
 
 // RunWorker connects to the enqueue socket, registers schedules, and runs
-// the claim loop until ctx is cancelled or the idle timeout fires.
+// the claim loop until ctx is cancelled or the idle timeout fires. Cancellation
+// stops new claims and drains active handlers with their leases still renewed.
 func RunWorker(ctx context.Context) error {
 	registryMu.Lock()
 	if len(registry) == 0 {
@@ -330,6 +331,8 @@ func RunWorker(ctx context.Context) error {
 
 type worker struct {
 	ctx         context.Context
+	runCtx      context.Context
+	concurrency int
 	client      *Client
 	handlers    map[string]workflowRegistration
 	workerID    string
@@ -345,6 +348,8 @@ type worker struct {
 func newWorker(ctx context.Context, client *Client, handlers map[string]workflowRegistration) *worker {
 	w := &worker{
 		ctx:         ctx,
+		runCtx:      context.WithoutCancel(ctx),
+		concurrency: parseWorkerConcurrency(),
 		client:      client,
 		handlers:    handlers,
 		workerID:    fmt.Sprintf("worker-%d", os.Getpid()),
@@ -360,6 +365,9 @@ func newWorker(ctx context.Context, client *Client, handlers map[string]workflow
 }
 
 func (w *worker) run() error {
+	var active sync.WaitGroup
+	defer active.Wait()
+	slots := make(chan struct{}, w.concurrency)
 	names := make([]string, 0, len(w.handlers))
 	for name := range w.handlers {
 		names = append(names, name)
@@ -369,17 +377,30 @@ func (w *worker) run() error {
 		select {
 		case <-w.ctx.Done():
 			return nil
-		default:
+		case slots <- struct{}{}:
+		}
+		if w.ctx.Err() != nil {
+			<-slots
+			return nil
 		}
 
 		task, err := w.client.Claim(w.ctx, w.workerID, names, w.leaseMs)
 		if err != nil {
+			<-slots
+			if w.ctx.Err() != nil {
+				return nil
+			}
 			fmt.Fprintln(os.Stderr, "tako-worker: claim error:", err)
-			time.Sleep(time.Duration(w.pollMs) * time.Millisecond)
+			select {
+			case <-w.ctx.Done():
+				return nil
+			case <-time.After(time.Duration(w.pollMs) * time.Millisecond):
+			}
 			continue
 		}
 		if task == nil {
-			if w.idleTimeout > 0 &&
+			<-slots
+			if len(slots) == 0 && w.idleTimeout > 0 &&
 				time.Since(time.UnixMilli(w.lastClaimAt.Load())) >= w.idleTimeout {
 				return nil
 			}
@@ -392,7 +413,15 @@ func (w *worker) run() error {
 		}
 
 		w.lastClaimAt.Store(time.Now().UnixMilli())
-		w.execute(task)
+		active.Add(1)
+		go func() {
+			defer active.Done()
+			defer func() {
+				w.lastClaimAt.Store(time.Now().UnixMilli())
+				<-slots
+			}()
+			w.execute(task)
+		}()
 	}
 }
 
@@ -407,7 +436,7 @@ func (w *worker) finalize(op, runID string, err error) {
 func (w *worker) execute(task *Run) {
 	reg, ok := w.handlers[task.Name]
 	if !ok {
-		w.finalize("fail", task.ID, w.client.Fail(w.ctx, task.ID, w.workerID, fmt.Sprintf("no handler registered for %q", task.Name), nil, true))
+		w.finalize("fail", task.ID, w.client.Fail(w.runCtx, task.ID, w.workerID, fmt.Sprintf("no handler registered for %q", task.Name), nil, true))
 		return
 	}
 
@@ -421,12 +450,12 @@ func (w *worker) execute(task *Run) {
 		Attempts:     task.Attempts,
 		Step: &StepAPI{
 			client:   w.client,
-			ctx:      w.ctx,
+			ctx:      w.runCtx,
 			runID:    task.ID,
 			workerID: w.workerID,
 			state:    stepState,
 		},
-		ctx: w.ctx,
+		ctx: w.runCtx,
 	}
 
 	hbStop := make(chan struct{})
@@ -446,13 +475,13 @@ func (w *worker) execute(task *Run) {
 			if reason != "" {
 				rp = &reason
 			}
-			w.finalize("cancel", task.ID, w.client.Cancel(w.ctx, task.ID, w.workerID, rp))
+			w.finalize("cancel", task.ID, w.client.Cancel(w.runCtx, task.ID, w.workerID, rp))
 		case errors.As(err, &fs):
-			w.finalize("fail", task.ID, w.client.Fail(w.ctx, task.ID, w.workerID, fs.err.Error(), nil, true))
+			w.finalize("fail", task.ID, w.client.Fail(w.runCtx, task.ID, w.workerID, fs.err.Error(), nil, true))
 		case errors.As(err, &ds):
-			w.finalize("defer", task.ID, w.client.Defer(w.ctx, task.ID, w.workerID, ds.wakeAt))
+			w.finalize("defer", task.ID, w.client.Defer(w.runCtx, task.ID, w.workerID, ds.wakeAt))
 		case errors.As(err, &ws):
-			w.finalize("wait-for-event", task.ID, w.client.WaitForEvent(w.ctx, task.ID, w.workerID, ws.stepName, ws.eventName, ws.timeoutAt))
+			w.finalize("wait-for-event", task.ID, w.client.WaitForEvent(w.runCtx, task.ID, w.workerID, ws.stepName, ws.eventName, ws.timeoutAt))
 		default:
 			maxAttempts := reg.config.maxAttempts
 			if maxAttempts == 0 {
@@ -472,11 +501,11 @@ func (w *worker) execute(task *Run) {
 				t := time.Now().Add(expBackoff(task.Attempts, base, max))
 				next = &t
 			}
-			w.finalize("fail", task.ID, w.client.Fail(w.ctx, task.ID, w.workerID, err.Error(), next, finalize))
+			w.finalize("fail", task.ID, w.client.Fail(w.runCtx, task.ID, w.workerID, err.Error(), next, finalize))
 		}
 		return
 	}
-	w.finalize("complete", task.ID, w.client.Complete(w.ctx, task.ID, w.workerID))
+	w.finalize("complete", task.ID, w.client.Complete(w.runCtx, task.ID, w.workerID))
 }
 
 func (w *worker) heartbeatLoop(id string, stop <-chan struct{}) {
@@ -487,7 +516,7 @@ func (w *worker) heartbeatLoop(id string, stop <-chan struct{}) {
 		case <-stop:
 			return
 		case <-ticker.C:
-			_ = w.client.Heartbeat(w.ctx, id, w.workerID, w.leaseMs)
+			_ = w.client.Heartbeat(w.runCtx, id, w.workerID, w.leaseMs)
 		}
 	}
 }
@@ -519,4 +548,12 @@ func parseIdleTimeout() time.Duration {
 		return 0
 	}
 	return time.Duration(ms) * time.Millisecond
+}
+
+func parseWorkerConcurrency() int {
+	value, err := strconv.Atoi(os.Getenv("TAKO_WORKER_CONCURRENCY"))
+	if err != nil || value < 1 {
+		return 500
+	}
+	return value
 }

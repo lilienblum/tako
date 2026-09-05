@@ -74,7 +74,7 @@ impl SshClient {
     }
 
     fn service_start_hint() -> &'static str {
-        "systemctl start tako-server (as root) or sudo systemctl start tako-server; rc-service tako-server start (as root) or sudo rc-service tako-server start"
+        "sudo /usr/local/bin/tako-server-service restart"
     }
 
     pub fn tako_start_hint() -> &'static str {
@@ -247,14 +247,18 @@ impl SshClient {
         let public_key = self.authenticated_public_key().ok_or_else(|| {
             SshError::Authentication("No authenticated SSH key available to enroll".to_string())
         })?;
-        let command = format!(
-            "sudo sh -c 'cat > {path} && chown tako:tako {path} && chmod 600 {path}'",
-            path = MANAGEMENT_AUTH_KEYS_PATH
-        );
+        let command = Self::enroll_management_key_command();
 
         self.exec_checked_with_stdin(&command, format!("{public_key}\n").as_bytes())
             .await?;
         Ok(())
+    }
+
+    pub(super) fn enroll_management_key_command() -> String {
+        format!(
+            "umask 077; cat > {path} && chmod 600 {path}",
+            path = MANAGEMENT_AUTH_KEYS_PATH
+        )
     }
 
     pub async fn install_tako_server(
@@ -273,6 +277,20 @@ impl SshClient {
         self.exec_checked_with_stdin(&command, INSTALL_SERVER_SCRIPT.as_bytes())
             .await?;
         Ok(())
+    }
+
+    pub async fn configure_tako_server(&self, ports: Option<ServerInstallPorts>) -> SshResult<()> {
+        self.exec_checked(&Self::configure_server_command(ports))
+            .await?;
+        Ok(())
+    }
+
+    pub(super) fn configure_server_command(ports: Option<ServerInstallPorts>) -> String {
+        let action = match ports {
+            Some(ports) => format!("configure {} {}", ports.http_port, ports.https_port),
+            None => "restart".to_string(),
+        };
+        Self::run_as_root(&format!("{TAKO_SERVER_SERVICE_HELPER} {action}"))
     }
 
     pub async fn tako_enter_upgrading(&self, owner: &str) -> SshResult<()> {

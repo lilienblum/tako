@@ -7,9 +7,8 @@
  * - POST /channels/authorize — Channel auth callback
  */
 
-import { ChannelRegistry } from "../channels";
+import { ChannelRegistry, definitionLifecycleConfig } from "../channels";
 import type { ChannelAuthorizeInput, TakoStatus } from "../types";
-import { dispatchWsMessage } from "../channels/handler";
 import { getInternalToken, getStorageBindings } from "./secrets";
 
 /** Host suffix used for SDK-internal app requests. */
@@ -18,8 +17,6 @@ export const TAKO_INTERNAL_HOST_SUFFIX = ".tako";
 export const TAKO_INTERNAL_STATUS_PATH = "/status";
 /** Channel authorization endpoint path on the internal host. */
 export const TAKO_INTERNAL_CHANNELS_AUTHORIZE_PATH = "/channels/authorize";
-/** WebSocket channel dispatch endpoint path on the internal host. */
-export const TAKO_INTERNAL_CHANNELS_DISPATCH_PATH = "/channels/dispatch";
 /** Channel registry endpoint path on the internal host. */
 export const TAKO_INTERNAL_CHANNELS_REGISTRY_PATH = "/channels/registry";
 /** Header used to authenticate SDK-internal requests. */
@@ -75,11 +72,6 @@ function internalToken(): string | null {
   return getInternalToken();
 }
 
-// CodeQL[js/stack-trace-exposure]: body may carry `err.message` (not stack)
-// from user handler exceptions via DispatchResult. This endpoint is gated on
-// Host: <app>.tako + internal token — only the tako-server infra reaches
-// it, and the server uses the error string for operator logging, never
-// forwarding it to external WS clients.
 function internalResponse(
   body: unknown,
   status: number,
@@ -145,8 +137,6 @@ export async function handleTakoEndpoint(
       return handleStatus(status, token);
     case TAKO_INTERNAL_CHANNELS_AUTHORIZE_PATH:
       return await handleChannelAuthorize(request, token, channels);
-    case TAKO_INTERNAL_CHANNELS_DISPATCH_PATH:
-      return await handleChannelDispatch(request, token, channels);
     case TAKO_INTERNAL_CHANNELS_REGISTRY_PATH:
       return handleChannelRegistry(request, token, channels);
 
@@ -171,6 +161,7 @@ function handleChannelRegistry(
       auth: false | { headerName?: string | false; cookieName?: string };
       transport?: "ws";
     } = {
+      ...definitionLifecycleConfig(definition),
       channel: name,
       paramsSchema: definition.paramsSchema,
       auth:
@@ -184,53 +175,13 @@ function handleChannelRegistry(
                 cookieName: definition.auth.cookieName,
               }),
             },
-      ...(definition.transport !== undefined && { transport: definition.transport }),
+      ...(definition.transport !== undefined && {
+        transport: definition.transport,
+      }),
     };
     return meta;
   });
   return internalResponse(defs, 200, token);
-}
-
-async function handleChannelDispatch(
-  request: Request,
-  token: string,
-  channels: ChannelRegistry,
-): Promise<Response> {
-  if (request.method !== "POST") {
-    return internalResponse({ error: "Method not allowed" }, 405, token);
-  }
-
-  type DispatchBody = {
-    channel?: string;
-    params?: Record<string, unknown>;
-    frame?: { type?: string; data?: unknown };
-    subject?: string;
-  };
-
-  let body: DispatchBody;
-  try {
-    body = (await request.json()) as DispatchBody;
-  } catch {
-    return internalResponse({ error: "Invalid JSON" }, 400, token);
-  }
-
-  if (
-    typeof body.channel !== "string" ||
-    !body.frame ||
-    typeof body.frame.type !== "string" ||
-    !("data" in body.frame)
-  ) {
-    return internalResponse({ error: "Invalid request" }, 400, token);
-  }
-
-  const input = {
-    channel: body.channel,
-    params: body.params ?? {},
-    frame: { type: body.frame.type, data: body.frame.data },
-    ...(typeof body.subject === "string" && { subject: body.subject }),
-  };
-  const result = await dispatchWsMessage(channels, input);
-  return internalResponse(result, 200, token);
 }
 
 /**
@@ -346,7 +297,11 @@ function localStorageBinding(
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     return null;
   }
-  const binding = raw as { provider?: unknown; path?: unknown; signing_key?: unknown };
+  const binding = raw as {
+    provider?: unknown;
+    path?: unknown;
+    signing_key?: unknown;
+  };
   if (
     binding.provider === "local" &&
     typeof binding.path === "string" &&

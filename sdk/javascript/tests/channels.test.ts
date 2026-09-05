@@ -78,8 +78,15 @@ describe("channels", () => {
   });
 
   test("subscribe opens the canonical SSE route", () => {
-    const eventSourceFactory = mock((url: string) => ({ url, kind: "eventsource", close() {} }));
-    const webSocketFactory = mock((url: string) => ({ url, kind: "websocket" }));
+    const eventSourceFactory = mock((url: string) => ({
+      url,
+      kind: "eventsource",
+      close() {},
+    }));
+    const webSocketFactory = mock((url: string) => ({
+      url,
+      kind: "websocket",
+    }));
     const channel = new Channel("chat", undefined, { roomId: "room-123" });
 
     const subscription = channel.subscribe({
@@ -99,7 +106,11 @@ describe("channels", () => {
   });
 
   test("subscribe encodes the whole channel name as one flat route segment", () => {
-    const eventSourceFactory = mock((url: string) => ({ url, kind: "eventsource", close() {} }));
+    const eventSourceFactory = mock((url: string) => ({
+      url,
+      kind: "eventsource",
+      close() {},
+    }));
     const channel = new Channel("chat/room-123");
 
     channel.subscribe({
@@ -219,7 +230,9 @@ describe("channels", () => {
     });
 
     const channel = new Channel("chat");
-    const subscription = channel.subscribe({ baseUrl: "https://app.example.com" });
+    const subscription = channel.subscribe({
+      baseUrl: "https://app.example.com",
+    });
     await (subscription.raw as SseReader).drain({ connections: 2 });
 
     expect(seen).toEqual([null, "1"]);
@@ -228,7 +241,12 @@ describe("channels", () => {
   test("connect targets the canonical websocket route with last_message_id", () => {
     const send = mock((_data: unknown) => {});
     const close = mock((_code?: number, _reason?: string) => {});
-    const webSocketFactory = mock((url: string) => ({ url, kind: "websocket", send, close }));
+    const webSocketFactory = mock((url: string) => ({
+      url,
+      kind: "websocket",
+      send,
+      close,
+    }));
     const channel = new Channel("chat", "ws", { roomId: "room-123" });
 
     const connection = channel.connect({
@@ -268,7 +286,9 @@ describe("channels", () => {
 
       close() {}
     }
-    configureChannels({ websocket: MockWebSocket as unknown as typeof WebSocket });
+    configureChannels({
+      websocket: MockWebSocket as unknown as typeof WebSocket,
+    });
 
     const channel = new Channel("chat", "ws", { roomId: "room-123" });
     const connection = channel.connect({ baseUrl: "https://app.example.com" });
@@ -299,7 +319,11 @@ describe("channels", () => {
     await Promise.resolve();
 
     expect(sent[0]).toBe(
-      JSON.stringify({ type: "tako.auth", token: "Bearer abc", lastMessageId: "42" }),
+      JSON.stringify({
+        type: "tako.auth",
+        token: "Bearer abc",
+        lastMessageId: "42",
+      }),
     );
   });
 
@@ -336,7 +360,7 @@ describe("channels", () => {
       "chat",
       defineChannel("chat", {
         auth: { verify: async () => ({ subject: "user-123" }) },
-        handler: { msg: async (d) => d },
+        transport: "ws",
         replayWindowMs: 86_400_000,
         inactivityTtlMs: 0,
         keepaliveIntervalMs: 25_000,

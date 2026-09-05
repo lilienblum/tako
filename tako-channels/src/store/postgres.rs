@@ -3,7 +3,7 @@ use parking_lot::Mutex;
 
 use crate::{ChannelAuthResponse, ChannelError, ChannelMessage, ChannelPublishPayload};
 
-use super::{channel_message_from_row, now_unix_ms};
+use super::{channel_message_from_row, now_unix_ms, resolve_replay_cursor};
 
 pub(super) struct PostgresChannelStore {
     client: Mutex<Client>,
@@ -35,6 +35,18 @@ impl PostgresChannelStore {
         let mut tx = client
             .transaction()
             .map_err(|e| ChannelError::Storage(e.to_string()))?;
+        // Serialize allocation and commit per app across servers. BIGSERIAL
+        // alone permits a higher ID to commit before a lower one, which would
+        // make a cursor-based subscriber skip the late commit.
+        tx.query_one(
+            "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+            &[&format!("{}:{}", self.schema, self.app_id)],
+        )
+        .map_err(|e| ChannelError::Storage(e.to_string()))?;
+        tx.execute(&format!(
+            "INSERT INTO {}.channel_metadata (app_id, channel, replay_window_ms, inactivity_ttl_ms, keepalive_interval_ms, max_connection_lifetime_ms, last_activity_unix_ms)
+             VALUES ($1, $2, 600000, 0, 25000, 7200000, $3) ON CONFLICT(app_id, channel) DO NOTHING", self.schema
+        ), &[&self.app_id, &channel, &now_unix_ms()]).map_err(|e| ChannelError::Storage(e.to_string()))?;
         tx.execute(
             &format!(
                 "UPDATE {}.channel_metadata
@@ -57,6 +69,8 @@ impl PostgresChannelStore {
             )
             .map_err(|e| ChannelError::Storage(e.to_string()))?;
         let id: i64 = row.get(0);
+        tx.execute(&format!("UPDATE {}.channel_metadata SET latest_message_id = $3 WHERE app_id = $1 AND channel = $2", self.schema), &[&self.app_id, &channel, &id])
+            .map_err(|e| ChannelError::Storage(e.to_string()))?;
         tx.commit()
             .map_err(|e| ChannelError::Storage(e.to_string()))?;
 
@@ -107,20 +121,11 @@ impl PostgresChannelStore {
         requested: Option<i64>,
     ) -> Result<Option<i64>, ChannelError> {
         let mut client = self.client.lock();
-        let latest = self.message_id(&mut client, channel, "MAX")?;
-        let Some(requested) = requested else {
-            return Ok(latest);
-        };
-
-        let Some(oldest) = self.message_id(&mut client, channel, "MIN")? else {
-            return Ok(Some(requested));
-        };
-
-        if requested < oldest.saturating_sub(1) {
-            return Err(ChannelError::StaleCursor);
-        }
-
-        Ok(Some(requested))
+        let row = client.query_one(&format!(
+            "SELECT MIN(id), COALESCE(MAX(id), (SELECT NULLIF(latest_message_id, 0) FROM {}.channel_metadata WHERE app_id = $1 AND channel = $2))
+             FROM {}.channel_messages WHERE app_id = $1 AND channel = $2", self.schema, self.schema
+        ), &[&self.app_id, &channel]).map_err(|e| ChannelError::Storage(e.to_string()))?;
+        resolve_replay_cursor(requested, row.get(0), row.get(1))
     }
 
     pub(super) fn sync_channel(
@@ -162,19 +167,37 @@ impl PostgresChannelStore {
             )
             .map_err(|e| ChannelError::Storage(e.to_string()))?;
 
-        if auth.replay_window_ms > 0 {
-            let cutoff = now - auth.replay_window_ms as i64;
-            client
+        Ok(())
+    }
+
+    pub(super) fn latest_id(&self) -> Result<Option<i64>, ChannelError> {
+        self.client
+            .lock()
+            .query_one(
+                &format!(
+                    "SELECT MAX(id) FROM {}.channel_messages WHERE app_id = $1",
+                    self.schema
+                ),
+                &[&self.app_id],
+            )
+            .map(|row| row.get(0))
+            .map_err(|e| ChannelError::Storage(e.to_string()))
+    }
+
+    pub(super) fn prune(&self) -> Result<(), ChannelError> {
+        let mut client = self.client.lock();
+        let now = now_unix_ms();
+        client
                 .execute(
                     &format!(
-                        "DELETE FROM {}.channel_messages
-                         WHERE app_id = $1 AND channel = $2 AND created_at_unix_ms < $3",
-                        self.schema
+                        "DELETE FROM {}.channel_messages AS messages USING {}.channel_metadata AS metadata
+                         WHERE messages.app_id = $1 AND metadata.app_id = messages.app_id AND metadata.channel = messages.channel
+                         AND metadata.replay_window_ms > 0 AND messages.created_at_unix_ms < ($2 - metadata.replay_window_ms)",
+                        self.schema, self.schema
                     ),
-                    &[&self.app_id, &channel, &cutoff],
+                    &[&self.app_id, &now],
                 )
                 .map_err(|e| ChannelError::Storage(e.to_string()))?;
-        }
 
         client
             .execute(
@@ -193,41 +216,21 @@ impl PostgresChannelStore {
                 &[&self.app_id, &now],
             )
             .map_err(|e| ChannelError::Storage(e.to_string()))?;
-        client
-            .execute(
-                &format!(
-                    "DELETE FROM {}.channel_metadata
-                     WHERE app_id = $1
-                       AND inactivity_ttl_ms > 0
-                       AND last_activity_unix_ms < ($2 - inactivity_ttl_ms)",
-                    self.schema
-                ),
-                &[&self.app_id, &now],
-            )
-            .map_err(|e| ChannelError::Storage(e.to_string()))?;
-
         Ok(())
-    }
-
-    fn message_id(
-        &self,
-        client: &mut Client,
-        channel: &str,
-        aggregate: &str,
-    ) -> Result<Option<i64>, ChannelError> {
-        let sql = format!(
-            "SELECT {aggregate}(id) FROM {}.channel_messages WHERE app_id = $1 AND channel = $2",
-            self.schema
-        );
-        client
-            .query_one(&sql, &[&self.app_id, &channel])
-            .map(|row| row.get(0))
-            .map_err(|e| ChannelError::Storage(e.to_string()))
     }
 }
 
 fn init_postgres(client: &mut Client, schema: &str) -> Result<(), ChannelError> {
-    client
+    let mut tx = client
+        .transaction()
+        .map_err(|e| ChannelError::Storage(e.to_string()))?;
+    // IF NOT EXISTS does not serialize concurrent PostgreSQL catalog writes.
+    tx.query_one(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+        &[&format!("tako-channel-schema:{schema}")],
+    )
+    .map_err(|e| ChannelError::Storage(e.to_string()))?;
+    tx
         .batch_execute(&format!(
             "CREATE SCHEMA IF NOT EXISTS {schema};
              CREATE TABLE IF NOT EXISTS {schema}.channel_messages (
@@ -240,6 +243,8 @@ fn init_postgres(client: &mut Client, schema: &str) -> Result<(), ChannelError> 
              );
              CREATE INDEX IF NOT EXISTS idx_channel_messages_app_channel_id
                ON {schema}.channel_messages(app_id, channel, id);
+             CREATE INDEX IF NOT EXISTS idx_channel_messages_app_id
+               ON {schema}.channel_messages(app_id, id);
              CREATE TABLE IF NOT EXISTS {schema}.channel_metadata (
                  app_id TEXT NOT NULL,
                  channel TEXT NOT NULL,
@@ -248,11 +253,14 @@ fn init_postgres(client: &mut Client, schema: &str) -> Result<(), ChannelError> 
                  keepalive_interval_ms BIGINT NOT NULL,
                  max_connection_lifetime_ms BIGINT NOT NULL,
                  last_activity_unix_ms BIGINT NOT NULL,
+                 latest_message_id BIGINT NOT NULL DEFAULT 0,
                  PRIMARY KEY(app_id, channel)
-             );"
+             );
+             ALTER TABLE {schema}.channel_metadata ADD COLUMN IF NOT EXISTS latest_message_id BIGINT NOT NULL DEFAULT 0;"
         ))
         .map_err(|e| ChannelError::Storage(e.to_string()))?;
-    Ok(())
+    tx.commit()
+        .map_err(|e| ChannelError::Storage(e.to_string()))
 }
 
 fn validate_pg_identifier(identifier: &str) -> Result<(), ChannelError> {

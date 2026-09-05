@@ -11,9 +11,7 @@ use std::time::Duration;
 
 #[cfg(unix)]
 use tako_spawn::ProcessIsolation;
-use tokio::io::AsyncReadExt;
 use tokio::process::Command as TokioCommand;
-use tokio::time::timeout;
 
 /// Hard cap on a single release-command invocation. The deploy flow
 /// fails when this fires.
@@ -66,57 +64,25 @@ async fn run_with_timeout(
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
     #[cfg(unix)]
-    let cgroup = isolation.as_ref().and_then(|value| value.cgroup.clone());
-    #[cfg(unix)]
     if let Some(isolation) = isolation {
         unsafe {
             cmd.pre_exec(move || tako_spawn::install_process_isolation(&isolation));
         }
     }
 
-    let mut child = cmd
+    let child = cmd
         .spawn()
         .map_err(|e| format!("Failed to spawn release command: {e}"))?;
-    #[cfg(unix)]
-    if let Some(cgroup) = cgroup
-        && let Some(pid) = child.id()
-        && let Err(error) = tako_spawn::assign_pid_to_cgroup(&cgroup, pid)
-    {
-        let _ = child.start_kill();
-        return Err(format!(
-            "Failed to assign release command to cgroup: {error}"
-        ));
-    }
 
-    let mut stdout_pipe = child.stdout.take().expect("piped stdout");
-    let mut stderr_pipe = child.stderr.take().expect("piped stderr");
-    let mut stdout = String::new();
-    let mut stderr = String::new();
-
-    let read_stdout = stdout_pipe.read_to_string(&mut stdout);
-    let read_stderr = stderr_pipe.read_to_string(&mut stderr);
-    let wait = child.wait();
-
-    let combined = async move {
-        let (_, _, status) = tokio::join!(read_stdout, read_stderr, wait);
-        status.map_err(|e| format!("Failed to wait on release command: {e}"))
-    };
-
-    match timeout(timeout_duration, combined).await {
-        Ok(Ok(status)) => Ok(ReleaseCommandOutcome {
-            exit_code: status.code(),
-            stdout,
-            stderr,
-            timed_out: false,
-        }),
-        Ok(Err(msg)) => Err(msg),
-        Err(_elapsed) => Ok(ReleaseCommandOutcome {
-            exit_code: None,
-            stdout,
-            stderr,
-            timed_out: true,
-        }),
-    }
+    let output = crate::process_output::capture(child, Some(timeout_duration))
+        .await
+        .map_err(|e| format!("Failed to collect release command output: {e}"))?;
+    Ok(ReleaseCommandOutcome {
+        exit_code: output.status.and_then(|status| status.code()),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        timed_out: output.status.is_none(),
+    })
 }
 
 #[cfg(test)]
@@ -124,6 +90,17 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn noisy_binary_output_keeps_bounded_tails_and_status() {
+        let dir = TempDir::new().unwrap();
+        let outcome = run("i=0; while [ $i -lt 20000 ]; do printf 'abcdefghij'; printf '0123456789' >&2; i=$((i+1)); done; printf '\\377stdout-tail'; printf '\\377stderr-tail' >&2; exit 7", dir.path(), &empty_env(), None).await.unwrap();
+        assert_eq!(outcome.exit_code, Some(7));
+        assert!(outcome.stdout.len() <= 65538);
+        assert!(outcome.stderr.len() <= 65538);
+        assert!(outcome.stdout.ends_with("stdout-tail"));
+        assert!(outcome.stderr.ends_with("stderr-tail"));
+    }
 
     fn empty_env() -> HashMap<String, String> {
         let mut env = HashMap::new();

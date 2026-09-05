@@ -3,6 +3,16 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 
 fn deploy_chat_app(server: &TestServer) {
+    // Reuse the installed test runtime; channel tests must not depend on downloads.
+    let bun = Command::new("which").arg("bun").output().unwrap();
+    assert!(bun.status.success());
+    let runtime_dir = server.data_dir().join("runtimes/bun/test");
+    fs::create_dir_all(&runtime_dir).unwrap();
+    std::os::unix::fs::symlink(
+        String::from_utf8(bun.stdout).unwrap().trim(),
+        runtime_dir.join("bun"),
+    )
+    .unwrap();
     let app_id = "chat-app/production";
     let app_dir = server
         .data_dir()
@@ -25,13 +35,13 @@ fn deploy_chat_app(server: &TestServer) {
     .unwrap();
     fs::write(
             app_dir.join("app.json"),
-            r#"{"protocol_version":0,"runtime":"bun","main":"index.ts","idle_timeout":300,"install":"true","start":["bun","{main}"]}"#,
+            r#"{"protocol_version":0,"runtime":"bun","runtime_version":"test","main":"index.ts","idle_timeout":300,"install":"true","start":["bun","{main}"]}"#,
         )
         .unwrap();
     fs::write(
         app_dir.join("index.ts"),
         r#"
-import { closeSync, readFileSync } from "node:fs";
+import { closeSync, readFileSync, writeSync } from "node:fs";
 
 const port = Number(process.env.PORT ?? "3000");
 const host = process.env.HOST ?? "127.0.0.1";
@@ -42,7 +52,7 @@ if (!internalToken) {
   throw new Error("bootstrap envelope on fd 3 did not provide a token");
 }
 
-Bun.serve({
+const server = Bun.serve({
   hostname: host,
   port,
   async fetch(request) {
@@ -120,6 +130,8 @@ Bun.serve({
     return new Response("chat-app");
   },
 });
+writeSync(4, `${server.port}\n`);
+closeSync(4);
 "#,
     )
     .unwrap();
@@ -183,8 +195,8 @@ fn test_publish_and_sse_auth_with_app_auth() {
         )
         .expect("denied SSE should complete");
     assert!(
-        denied.starts_with("HTTP/1.1 403") || denied.starts_with("HTTP/1.0 403"),
-        "expected 403 SSE response: {denied}"
+        denied.starts_with("HTTP/1.1 401") || denied.starts_with("HTTP/1.0 401"),
+        "expected 401 for missing credentials: {denied}"
     );
 }
 
@@ -280,8 +292,20 @@ fn publish_via_websocket(server: &TestServer, text: &str) -> String {
 }
 
 fn read_server_frame(stream: &mut TcpStream) -> Vec<u8> {
+    loop {
+        let (opcode, payload) = read_raw_server_frame(stream);
+        match opcode {
+            0x1 => return payload,
+            0x9 | 0xa => continue,
+            _ => panic!("expected text or keepalive frame, got opcode {opcode}: {payload:?}"),
+        }
+    }
+}
+
+fn read_raw_server_frame(stream: &mut TcpStream) -> (u8, Vec<u8>) {
     let mut first = [0u8; 2];
     stream.read_exact(&mut first).unwrap();
+    let opcode = first[0] & 0x0f;
     let payload_len = usize::from(first[1] & 0x7f);
     if payload_len == 126 {
         let mut extended = [0u8; 2];
@@ -289,7 +313,7 @@ fn read_server_frame(stream: &mut TcpStream) -> Vec<u8> {
         let len = u16::from_be_bytes(extended) as usize;
         let mut payload = vec![0u8; len];
         stream.read_exact(&mut payload).unwrap();
-        return payload;
+        return (opcode, payload);
     }
     if payload_len == 127 {
         let mut extended = [0u8; 8];
@@ -297,11 +321,11 @@ fn read_server_frame(stream: &mut TcpStream) -> Vec<u8> {
         let len = u64::from_be_bytes(extended) as usize;
         let mut payload = vec![0u8; len];
         stream.read_exact(&mut payload).unwrap();
-        return payload;
+        return (opcode, payload);
     }
     let mut payload = vec![0u8; payload_len];
     stream.read_exact(&mut payload).unwrap();
-    payload
+    (opcode, payload)
 }
 
 fn write_masked_text_frame(stream: &mut TcpStream, text: &str) {

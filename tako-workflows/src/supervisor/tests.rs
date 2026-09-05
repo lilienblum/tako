@@ -2,6 +2,16 @@ use super::*;
 use std::time::Duration;
 use tempfile::tempdir;
 
+async fn wait_for_exit(sup: &WorkerSupervisor) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while sup.is_running() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("worker did not exit");
+}
+
 fn sleep_spec(cwd: PathBuf, workers: u32, sleep_secs: &str) -> WorkerSpec {
     WorkerSpec {
         app: "test".into(),
@@ -123,8 +133,7 @@ async fn wake_respawns_missing_always_on_worker() {
     // Start with 1 always-on worker that sleeps briefly then exits.
     let sup = WorkerSupervisor::new(sleep_spec(dir.path().into(), 1, "0.05"));
     sup.start().await.unwrap();
-    // Give it time to exit on its own.
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    wait_for_exit(&sup).await;
     assert!(!sup.is_running());
     sup.wake().unwrap();
     assert!(sup.is_running());
@@ -163,8 +172,7 @@ async fn health_check_fails_after_worker_exits_without_claiming() {
     let dir = tempdir().unwrap();
     let sup = WorkerSupervisor::new(failing_spec(dir.path().into()));
     sup.wake().unwrap();
-    // Let the child exit.
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    wait_for_exit(&sup).await;
     // Re-poll: this call processes exits and flips the health flag.
     let err = sup.check_startup_health().expect_err("should be unhealthy");
     assert!(
@@ -178,7 +186,7 @@ async fn notify_claimed_clears_unhealthy_state() {
     let dir = tempdir().unwrap();
     let sup = WorkerSupervisor::new(failing_spec(dir.path().into()));
     sup.wake().unwrap();
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    wait_for_exit(&sup).await;
     sup.check_startup_health().unwrap_err();
     sup.notify_claimed();
     assert!(sup.check_startup_health().is_ok());
@@ -189,7 +197,7 @@ async fn wake_returns_error_while_in_unhealthy_cooldown() {
     let dir = tempdir().unwrap();
     let sup = WorkerSupervisor::new(failing_spec(dir.path().into()));
     sup.wake().unwrap();
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    wait_for_exit(&sup).await;
     // First wake after cold-exit observation must refuse to respawn.
     sup.check_startup_health().unwrap_err();
     let err = sup.wake().expect_err("wake during cooldown should error");
@@ -216,7 +224,7 @@ async fn clean_idle_exit_does_not_mark_unhealthy() {
     };
     let sup = WorkerSupervisor::new(spec);
     sup.wake().unwrap();
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    wait_for_exit(&sup).await;
     assert!(sup.check_startup_health().is_ok());
 }
 
@@ -239,13 +247,13 @@ async fn background_reaper_collects_clean_idle_exit_without_poll() {
     };
     let sup = WorkerSupervisor::new(spec);
     sup.wake().unwrap();
-    for _ in 0..20 {
-        if sup.state.lock().children.is_empty() {
-            return;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !sup.state.lock().children.is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    panic!("background reaper did not collect exited worker");
+    })
+    .await
+    .expect("background reaper did not collect exited worker");
 }
 
 #[cfg(unix)]
@@ -269,7 +277,7 @@ async fn wake_accepts_clean_exit_when_worker_closes_bootstrap_pipe() {
     let sup = WorkerSupervisor::new(spec);
 
     sup.wake().unwrap();
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    wait_for_exit(&sup).await;
 
     assert!(sup.check_startup_health().is_ok());
 }

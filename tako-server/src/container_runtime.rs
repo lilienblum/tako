@@ -27,8 +27,10 @@ pub(crate) fn detect_container_engine() -> Result<ContainerEngine, String> {
     let engine = ContainerEngine::Podman;
     if std::process::Command::new(engine.binary())
         .arg("--version")
-        .output()
-        .is_ok_and(|output| output.status.success())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
     {
         return Ok(engine);
     }
@@ -44,20 +46,26 @@ pub(crate) async fn build_release_image(
     let context = container_build_context(release_dir, manifest)?;
     let container_file = container_file_path(release_dir, manifest)?;
 
-    let output = TokioCommand::new(engine.binary())
+    let child = TokioCommand::new(engine.binary())
         .arg("build")
         .arg("-f")
         .arg(&container_file)
         .arg("-t")
         .arg(&tag)
         .arg(&context)
-        .output()
-        .await
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
         .map_err(|e| format!("Failed to run {} build: {e}", engine.binary()))?;
-    if !output.status.success() {
+    let output = crate::process_output::capture(child, None)
+        .await
+        .map_err(|e| format!("Failed to collect {} build output: {e}", engine.binary()))?;
+    let status = output.status.expect("no timeout configured");
+    if !status.success() {
         return Err(format_process_failure(
             &format!("{} build", engine.binary()),
-            output.status,
+            status,
             &output.stdout,
             &output.stderr,
         ));
@@ -253,9 +261,16 @@ fn format_process_failure(
     if detail.is_empty() {
         return format!("{context} ({status_text})");
     }
-    let preview: String = detail.chars().take(400).collect();
+    let preview: String = detail
+        .chars()
+        .rev()
+        .take(400)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
     if detail.chars().count() > 400 {
-        format!("{context} ({status_text}): {preview}...")
+        format!("{context} ({status_text}): ...{preview}")
     } else {
         format!("{context} ({status_text}): {preview}")
     }

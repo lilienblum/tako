@@ -38,9 +38,7 @@ describe("InferChannel", () => {
 
         const chat = defineChannel("chat", {
           paramsSchema: (t) => t.Object({ roomId: t.String() }),
-          handler: {
-            msg: (data: { text: string }) => data,
-          },
+          transport: "ws",
         }).$messageTypes<{ msg: { text: string } }>();
 
         type Chat = InferChannel<typeof chat>;

@@ -12,6 +12,21 @@ fn temp_store() -> (TempDir, SqliteStateStore) {
     (temp, store)
 }
 
+#[test]
+fn state_database_is_private_to_service_user() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_temp, store) = temp_store();
+    store.init().unwrap();
+    assert_eq!(
+        std::fs::metadata(store.path())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+}
+
 fn sample_config() -> AppConfig {
     AppConfig {
         name: "my-app".to_string(),

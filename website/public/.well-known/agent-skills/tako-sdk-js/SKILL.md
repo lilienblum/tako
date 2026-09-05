@@ -276,13 +276,7 @@ export default defineChannel("chat", {
       return { subject: userId };
     },
   },
-  handler: {
-    msg: async (data, ctx) => {
-      await db.saveMessage(ctx.params.roomId, data);
-      return data; // fanned out to subscribers
-    },
-    typing: async (data) => data,
-  },
+  transport: "ws",
   replayWindowMs: 24 * 60 * 60 * 1000,
   inactivityTtlMs: 0,
   keepaliveIntervalMs: 25_000,
@@ -294,7 +288,7 @@ export default defineChannel("chat", {
 - `paramsSchema` serializes to JSON Schema; tako-server validates query params before app auth.
 - `.$messageTypes<M>()` is a type-level narrower that declares the message map — runtime no-op. Omit for channels with no typed messages.
 - `auth` is optional. Omit or set `false` for public channels.
-- `handler` presence decides transport: present → WebSocket, absent → SSE (broadcast-only). SSE channels reject client POST publishes.
+- `transport: "ws"` enables WebSocket; the default is receive-only SSE. WebSocket frames are stored and broadcast as sent. Handle application mutations in your app's HTTP endpoints.
 - Every publish is stored before delivery. Messages are not claimed or removed when one subscriber receives them. `replayWindowMs` defaults to 10 minutes and can be overridden per channel.
 - Browser clients reconnect until explicitly closed. Network loss, laptop sleep, server restarts, and clean connection rotation are transient; the SDK retries with bounded backoff, wakes early on the browser `online` event, and resumes from the last received message id while it remains inside the replay window.
 
@@ -439,8 +433,6 @@ export default defineWorkflow<{ userId: string; to: string }>("send-email", {
   schedule: "0 9 * * *", // cron: daily at 9am (5-field)
   worker: "email", // metadata for SDK discovery; not production isolation yet
   local: true, // optional per-server local storage/cron for multi-server deploys
-  concurrency: 10, // max parallel runs per worker (default 10)
-  timeoutMs: 30_000, // handler timeout (default Infinity)
   backoff: { base: 1_000, max: 3_600_000 }, // exponential backoff
   handler: async (payload, ctx) => {
     ctx.logger.info("send-email started");
@@ -530,7 +522,7 @@ await signal("approval:order-abc", { approved: true });
 
 ### tako.toml configuration
 
-The parser accepts base settings, named groups, and per-server overrides, but the current production server supervises one scale-to-zero workflow lane per app with fixed runtime settings. These fields do not yet control production worker count, concurrency, group isolation, or per-server tuning. Do not present them as operational until the production supervisor consumes them.
+Production starts one scale-to-zero process per JavaScript worker group, selected by `worker: "name"`. Each process receives runtime concurrency (currently 500) and exits after 300 seconds idle. Worker counts, concurrency, and per-server overrides in `tako.toml` are parsed but not yet applied by production supervision.
 
 ```toml
 [workflows]                # parsed desired base settings

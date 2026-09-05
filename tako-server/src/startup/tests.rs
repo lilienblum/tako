@@ -48,6 +48,14 @@ fn prepare_data_dir_is_idempotent() {
 }
 
 #[test]
+fn prepare_data_dir_keeps_certificate_and_account_directories_private() {
+    let tmp = tempfile::tempdir().unwrap();
+    prepare_data_dir(tmp.path()).unwrap();
+    assert_eq!(mode_of(&tmp.path().join("certs")), 0o700);
+    assert_eq!(mode_of(&tmp.path().join("acme")), 0o700);
+}
+
+#[test]
 fn upgrade_reload_marker_is_consumed() {
     let tmp = tempfile::tempdir().unwrap();
     let marker = tmp.path().join(tako_core::UPGRADE_RELOAD_MARKER_FILE);

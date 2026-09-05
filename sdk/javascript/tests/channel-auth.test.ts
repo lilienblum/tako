@@ -61,13 +61,13 @@ describe("ChannelRegistry.authorize", () => {
     expect(resp.ok).toBe(true);
   });
 
-  test("allows when verify returns true; stamps transport when handler present", async () => {
+  test("allows when verify returns true; stamps transport when WebSocket transport is enabled", async () => {
     const reg = newRegistry();
     reg.register(
       "chat",
       defineChannel("chat", {
         auth: { verify: async () => true },
-        handler: { msg: async (data: { text: string }) => data },
+        transport: "ws",
       }),
     );
     const resp = await reg.authorize({
@@ -87,11 +87,15 @@ describe("ChannelRegistry.authorize", () => {
       defineChannel("chat", {
         auth: {
           verify: async (input) => {
-            seen = { params: input.params, operation: input.operation, header: input.header };
+            seen = {
+              params: input.params,
+              operation: input.operation,
+              header: input.header,
+            };
             return true;
           },
         },
-        handler: { msg: async (d) => d },
+        transport: "ws",
       }),
     );
     await reg.authorize({
@@ -107,7 +111,7 @@ describe("ChannelRegistry.authorize", () => {
     });
   });
 
-  test("rejects client publish on SSE channel (no handler)", async () => {
+  test("rejects client publish on SSE channel", async () => {
     const reg = newRegistry();
     reg.register(
       "status",

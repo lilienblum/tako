@@ -1,5 +1,6 @@
 //! Instance spawner - spawns and monitors app processes
 
+mod bootstrap;
 mod health_probe;
 mod readiness;
 mod spawn_command;
@@ -71,7 +72,7 @@ impl Spawner {
         let isolation = crate::isolation::app_process_isolation(&self.data_dir, &app_name)
             .map_err(|error| InstanceError::SpawnError(std::io::Error::other(error)))?;
 
-        let (child, readiness_fd) = spawn_child_process(
+        let (child, readiness_fd, bootstrap) = spawn_child_process(
             &config,
             &env,
             &extra_args,
@@ -94,11 +95,11 @@ impl Spawner {
             })
             .await;
 
-        // Wait for the SDK to report the bound port on fd 4.
-        match timeout(
-            config.startup_timeout,
-            wait_for_ready(instance.clone(), readiness_fd),
-        )
+        // Bootstrap backpressure and fd-4 readiness share one startup deadline.
+        match timeout(config.startup_timeout, async {
+            bootstrap.write().await.map_err(InstanceError::SpawnError)?;
+            wait_for_ready(instance.clone(), readiness_fd).await
+        })
         .await
         {
             Ok(Ok(())) => {

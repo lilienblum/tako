@@ -1,6 +1,54 @@
 use super::*;
 use russh::keys::load_secret_key;
 
+#[cfg(unix)]
+#[test]
+fn management_key_enrollment_writes_as_service_user() {
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::{Command, Stdio};
+
+    let directory = tempfile::tempdir().unwrap();
+    let key_path = directory.path().join("management-authorized-keys");
+    let command = SshClient::enroll_management_key_command().replace(
+        "/opt/tako/management-authorized-keys",
+        key_path.to_str().unwrap(),
+    );
+    let mut child = Command::new("sh")
+        .args(["-c", &format!("sudo() {{ return 99; }}; {command}")])
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let public_key = "ssh-ed25519 test-key\n";
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(public_key.as_bytes())
+        .unwrap();
+    assert!(child.wait().unwrap().success());
+    assert_eq!(std::fs::read_to_string(&key_path).unwrap(), public_key);
+    assert_eq!(
+        std::fs::metadata(key_path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+}
+
+#[test]
+fn server_configuration_uses_approved_helper_with_numeric_ports() {
+    assert_eq!(
+        SshClient::configure_server_command(Some(ServerInstallPorts {
+            http_port: 8080,
+            https_port: 8443,
+        })),
+        SshClient::run_as_root("/usr/local/bin/tako-server-service configure 8080 8443")
+    );
+    assert_eq!(
+        SshClient::configure_server_command(None),
+        SshClient::run_as_root("/usr/local/bin/tako-server-service restart")
+    );
+}
+
 const ENCRYPTED_ED25519_KEY: &str = "-----BEGIN OPENSSH PRIVATE KEY-----\n\
 b3BlbnNzaC1rZXktdjEAAAAACmFlczI1Ni1jdHIAAAAGYmNyeXB0AAAAGAAAABCRv2KPnI\n\
 IRphE01i7dWiijAAAAGAAAAAEAAAAzAAAAC3NzaC1lZDI1NTE5AAAAIBS7MYzXocRVMCqK\n\

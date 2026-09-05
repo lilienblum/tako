@@ -22,6 +22,7 @@ mod metrics;
 mod object_storage;
 mod operations;
 mod paths;
+mod process_output;
 mod protocol_compatibility;
 mod proxy;
 mod release;
@@ -310,6 +311,11 @@ fn run_protocol_compatibility_mode(args: &Args) -> Result<(), String> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(target_os = "linux")]
+    if std::env::args().nth(1).as_deref() == Some("--provision-app") {
+        return isolation::run_helper(&std::env::args().skip(2).collect::<Vec<_>>())
+            .map_err(|error| std::io::Error::other(error).into());
+    }
     install_rustls_crypto_provider();
 
     let args = Args::parse();

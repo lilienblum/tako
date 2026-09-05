@@ -7,7 +7,6 @@
 
 mod adapter;
 mod artifact;
-mod cache;
 mod container;
 mod executor;
 pub mod go;
@@ -18,7 +17,6 @@ mod workdir;
 
 pub use adapter::*;
 pub use artifact::*;
-pub use cache::*;
 pub use container::*;
 pub use executor::*;
 pub use preset::*;

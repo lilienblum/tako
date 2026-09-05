@@ -13,14 +13,12 @@ fn remote_upgrade_reload_marker_path(data_dir: &str) -> String {
 pub(super) fn remote_prepare_upgrade_reload_command(data_dir: &str, owner: &str) -> String {
     let marker = crate::shell::shell_single_quote(&remote_upgrade_reload_marker_path(data_dir));
     let owner = crate::shell::shell_single_quote(owner);
-    SshClient::run_with_root_or_sudo(&format!(
-        "umask 077; printf '%s\\n' {owner} > {marker}; chmod 0644 {marker}"
-    ))
+    format!("umask 077; printf '%s\\n' {owner} > {marker}; chmod 0644 {marker}")
 }
 
 pub(super) fn remote_cleanup_upgrade_reload_command(data_dir: &str) -> String {
     let marker = crate::shell::shell_single_quote(&remote_upgrade_reload_marker_path(data_dir));
-    SshClient::run_with_root_or_sudo(&format!("rm -f {marker}"))
+    format!("rm -f {marker}")
 }
 
 pub(super) fn remote_protocol_compatibility_command(data_dir: &str, force: bool) -> String {
@@ -30,10 +28,10 @@ pub(super) fn remote_protocol_compatibility_command(data_dir: &str, force: bool)
     } else {
         ""
     };
-    SshClient::run_with_root_or_sudo(&format!(
+    format!(
         "{SERVER_BINARY_PATH} --check-protocol-compatibility --data-dir {data_dir} --expected-protocol-version {}{force_arg}",
         tako_core::PROTOCOL_VERSION
-    ))
+    )
 }
 
 pub(super) async fn check_remote_protocol_compatibility(

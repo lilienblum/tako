@@ -49,7 +49,7 @@ export default defineChannel("site-events", {
       return { subject: session.userId };
     },
   },
-  handler: {},
+  transport: "ws",
 }).$messageTypes<SiteMessages>();
 ```
 
@@ -97,14 +97,14 @@ Omit `auth` or set it to `false` for a public channel. Otherwise, `auth.verify` 
 
 `headerName` defaults to `authorization`. Set `headerName: false` with `cookieName` for cookie-only auth. Browser clients can pass `authorization: token`; Tako sends `Authorization: Bearer <token>` for SSE and the equivalent auth envelope for WebSocket.
 
-The `handler` option chooses the live transport:
+The `transport` option chooses the live transport:
 
 | Need                       | Definition                                          | Browser API            |
 | -------------------------- | --------------------------------------------------- | ---------------------- |
-| Server-to-browser updates  | Omit `handler`; the channel uses receive-only SSE   | `subscribe()`          |
-| Browser-to-server messages | Add a `handler` map; its presence selects WebSocket | `connect()` / `send()` |
+| Server-to-browser updates  | Omit `transport`; the channel uses receive-only SSE | `subscribe()`          |
+| Browser-to-server messages | Set `transport: "ws"`                               | `connect()` / `send()` |
 
-The handler map currently selects WebSocket transport only. Production does not invoke its callbacks. WebSocket client frames are `{ type, data }`; the proxy stores and broadcasts them as sent. An empty handler map is sufficient when you need browser-to-server messages.
+WebSocket client frames are `{ type, data }`; the proxy stores and broadcasts them as sent. Channels do not run application callbacks for incoming messages.
 
 ## Publish From The Server
 
@@ -169,6 +169,8 @@ function LiveStatus({ token }: { token: string }) {
 ## Recover After Disconnects
 
 Each publish is inserted before delivery. `replayWindowMs` defaults to 10 minutes, so a reconnect can bridge a browser reload, laptop sleep, network change, server restart, or rolling deploy.
+
+Replay cleanup runs every second, including when no clients are connected. Channel definitions carry their lifecycle settings with server-side publishes, so retention applies before the first subscription. Connections share an app-wide change poller; database reads run outside the async request workers. Shared Postgres stores detect publishes from every server.
 
 - SSE resumes with `Last-Event-ID`; `subscribe({ lastEventId })` sets an initial cursor. The built-in fetch-based SSE reader reconnects until `close()` is called and carries its latest message id forward.
 - WebSocket resumes with `last_message_id`; `connect({ lastMessageId })` sets it. `useChannel` tracks the latest id and reconnects WebSockets with bounded backoff and jitter. A lower-level `connect()` call returns one socket, so non-React code owns WebSocket reconnection.

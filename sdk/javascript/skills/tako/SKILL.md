@@ -279,7 +279,6 @@ tako completions --yes
 
 zsh is installed only when a writable directory is already on `fpath`.
 
-
 ### `tako uninstall [--yes]`
 
 Uninstall Tako and remove all local data.

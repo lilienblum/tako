@@ -106,16 +106,6 @@ export interface WorkflowOpts<P = unknown> {
     max?: number;
   };
   /**
-   * Worker concurrency per instance.
-   * @defaultValue 10
-   */
-  concurrency?: number;
-  /**
-   * Handler timeout in ms.
-   * @defaultValue Infinity
-   */
-  timeoutMs?: number;
-  /**
    * Cron expression (5-field: minute hour day-of-month month day-of-week).
    * @example "0 9 * * 1-5"    — weekdays at 9am
    * @example "&#42;/15 * * * *" — every 15 minutes

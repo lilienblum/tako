@@ -14,6 +14,94 @@ use std::process::ExitStatus;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
+#[cfg(target_os = "linux")]
+#[tokio::test]
+#[ignore = "run as capability-bearing service user with TAKO_TEST_CGROUP and TAKO_TEST_APP_UID/GID"]
+async fn service_spawner_executes_app_in_its_cgroup() {
+    let uid: u32 = std::env::var("TAKO_TEST_APP_UID").unwrap().parse().unwrap();
+    let gid: u32 = std::env::var("TAKO_TEST_APP_GID").unwrap().parse().unwrap();
+    assert_ne!(
+        unsafe { libc::geteuid() },
+        0,
+        "exercise the nonroot parent path"
+    );
+    let cgroup = std::path::PathBuf::from(std::env::var("TAKO_TEST_CGROUP").unwrap());
+    let config = AppConfig {
+        path: "/tmp".into(),
+        command: vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            "cat /proc/self/cgroup; cat /proc/self/status; sleep 1".into(),
+        ],
+        ..Default::default()
+    };
+    let policy = tako_spawn::ProcessIsolation {
+        user: Some(tako_spawn::UserIds {
+            uid,
+            gid,
+            supplementary_gids: vec![],
+        }),
+        cgroup: Some(tako_spawn::CgroupAssignment {
+            path: cgroup.clone(),
+        }),
+        ..Default::default()
+    };
+    let (child, readiness, bootstrap) = spawn_child_process(
+        &config,
+        &HashMap::new(),
+        &[],
+        policy,
+        "test",
+        &HashMap::new(),
+    )
+    .expect("service spawner should finish after child isolation succeeds");
+    drop(readiness);
+    drop(bootstrap);
+    let output = child.wait_with_output().await.unwrap();
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        text.contains(cgroup.file_name().unwrap().to_str().unwrap()),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("Uid:\t{uid}\t{uid}\t{uid}\t{uid}")),
+        "{text}"
+    );
+    assert!(text.contains("CapEff:\t0000000000000000"), "{text}");
+}
+
+#[tokio::test]
+async fn bootstrap_backpressure_respects_startup_timeout() {
+    let dir = tempfile::tempdir().unwrap();
+    let (tx, _rx) = mpsc::channel(4);
+    let app = App::new(
+        AppConfig {
+            name: "bootstrap-timeout".into(),
+            path: dir.path().into(),
+            // Keep fd 3 open without reading; exec avoids a grandchild holding it.
+            command: vec!["/bin/sh".into(), "-c".into(), "exec sleep 2".into()],
+            secrets: HashMap::from([("LARGE".into(), "x".repeat(1024 * 1024))]),
+            startup_timeout: Duration::from_millis(100),
+            ..Default::default()
+        },
+        tx,
+        noop_log_handle(),
+    );
+    let instance = app.allocate_instance();
+    let result = tokio::time::timeout(
+        Duration::from_secs(3),
+        Spawner::new().spawn(&app, instance.clone()),
+    )
+    .await
+    .expect("bootstrap blocked the async runtime");
+    assert!(matches!(
+        result,
+        Err(InstanceError::StartupTimeoutWithDetail(_))
+    ));
+    assert!(!instance.is_alive().await);
+}
+
 #[test]
 fn test_spawner_creation() {
     let _spawner = Spawner::new();
@@ -69,7 +157,7 @@ fn spawn_child_process_returns_permission_denied_when_app_user_switch_fails() {
     );
 
     match result {
-        Ok((mut child, _)) => {
+        Ok((mut child, _, _)) => {
             let _ = child.start_kill();
             panic!("spawn unexpectedly retried as the service user");
         }
@@ -91,7 +179,7 @@ async fn spawn_child_process_does_not_inherit_server_env() {
         ],
         ..Default::default()
     };
-    let (child, readiness_fd) = spawn_child_process(
+    let (child, readiness_fd, bootstrap) = spawn_child_process(
         &config,
         &HashMap::new(),
         &[],
@@ -108,6 +196,7 @@ async fn spawn_child_process_does_not_inherit_server_env() {
     )
     .unwrap();
     drop(readiness_fd);
+    drop(bootstrap);
 
     let output = child.wait_with_output().await.unwrap();
 
@@ -221,9 +310,9 @@ fn build_instance_env_only_has_app_vars() {
     assert!(!env.contains_key("SECRET"));
 }
 
-#[test]
+#[tokio::test]
 #[cfg(unix)]
-fn bootstrap_pipe_envelope_has_token_and_secrets() {
+async fn bootstrap_pipe_envelope_has_token_and_secrets() {
     use std::io::Read;
 
     let secrets = HashMap::from([
@@ -236,10 +325,15 @@ fn bootstrap_pipe_envelope_has_token_and_secrets() {
     let (read_end, writer) =
         create_bootstrap_pipe(token, &secrets, &storages).expect("create pipe");
 
-    let mut buf = String::new();
-    let mut file = std::fs::File::from(read_end);
-    file.read_to_string(&mut buf).expect("read pipe");
-    writer.join().expect("writer thread").expect("write ok");
+    let reader = tokio::task::spawn_blocking(move || {
+        let mut buf = String::new();
+        std::fs::File::from(read_end)
+            .read_to_string(&mut buf)
+            .expect("read pipe");
+        buf
+    });
+    writer.write().await.expect("write ok");
+    let buf = reader.await.unwrap();
 
     let parsed: serde_json::Value = serde_json::from_str(&buf).expect("valid JSON");
     assert_eq!(parsed["token"].as_str(), Some(token));
@@ -251,9 +345,9 @@ fn bootstrap_pipe_envelope_has_token_and_secrets() {
     assert_eq!(parsed["storages"].as_object().unwrap().len(), 0);
 }
 
-#[test]
+#[tokio::test]
 #[cfg(unix)]
-fn bootstrap_pipe_is_created_even_with_empty_secrets() {
+async fn bootstrap_pipe_is_created_even_with_empty_secrets() {
     use std::io::Read;
 
     let secrets: HashMap<String, String> = HashMap::new();
@@ -263,10 +357,15 @@ fn bootstrap_pipe_is_created_even_with_empty_secrets() {
     let (read_end, writer) =
         create_bootstrap_pipe(token, &secrets, &storages).expect("create pipe");
 
-    let mut buf = String::new();
-    let mut file = std::fs::File::from(read_end);
-    file.read_to_string(&mut buf).expect("read pipe");
-    writer.join().expect("writer thread").expect("write ok");
+    let reader = tokio::task::spawn_blocking(move || {
+        let mut buf = String::new();
+        std::fs::File::from(read_end)
+            .read_to_string(&mut buf)
+            .expect("read pipe");
+        buf
+    });
+    writer.write().await.expect("write ok");
+    let buf = reader.await.unwrap();
 
     let parsed: serde_json::Value = serde_json::from_str(&buf).expect("valid JSON");
     assert_eq!(parsed["token"].as_str(), Some(token));

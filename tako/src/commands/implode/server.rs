@@ -37,8 +37,7 @@ pub async fn implode_server(
 
     let ssh = SshClient::connect_to(server).await?;
 
-    let script = build_server_implode_script();
-    let cmd = SshClient::run_with_root_or_sudo(&script);
+    let cmd = build_server_implode_command();
 
     output::with_spinner_async(
         &format!("Removing tako-server from {server_name}"),
@@ -60,36 +59,6 @@ pub async fn implode_server(
     Ok(())
 }
 
-pub(super) fn build_server_implode_script() -> String {
-    // Stop and disable services (supports both systemd and OpenRC)
-    // Remove service files, binaries, data, and sockets
-    [
-        // Stop services
-        "if command -v systemctl >/dev/null 2>&1; then",
-        "  systemctl stop tako-server tako-server-standby 2>/dev/null || true",
-        "  systemctl disable tako-server tako-server-standby 2>/dev/null || true",
-        "fi",
-        "if command -v rc-service >/dev/null 2>&1; then",
-        "  rc-service tako-server stop 2>/dev/null || true",
-        "  rc-service tako-server-standby stop 2>/dev/null || true",
-        "  rc-update del tako-server 2>/dev/null || true",
-        "  rc-update del tako-server-standby 2>/dev/null || true",
-        "fi",
-        // Remove systemd service files and drop-ins
-        "rm -f /etc/systemd/system/tako-server.service",
-        "rm -f /etc/systemd/system/tako-server-standby.service",
-        "rm -rf /etc/systemd/system/tako-server.service.d",
-        "if command -v systemctl >/dev/null 2>&1; then systemctl daemon-reload 2>/dev/null || true; fi",
-        // Remove OpenRC service files
-        "rm -f /etc/init.d/tako-server",
-        "rm -f /etc/init.d/tako-server-standby",
-        // Remove binaries
-        "rm -f /usr/local/bin/tako-server",
-        "rm -f /usr/local/bin/tako-server-service",
-        "rm -f /usr/local/bin/tako-server-install-refresh",
-        // Remove data and sockets
-        "rm -rf /opt/tako",
-        "rm -rf /var/run/tako",
-    ]
-    .join("\n")
+pub(super) fn build_server_implode_command() -> String {
+    crate::ssh::SshClient::run_as_root("/usr/local/bin/tako-server-service implode")
 }

@@ -468,8 +468,6 @@ impl WorkerSupervisor {
         let bootstrap_fd: RawFd = bootstrap_read_end.as_raw_fd();
         #[cfg(unix)]
         let isolation = self.spec.isolation.clone();
-        #[cfg(unix)]
-        let cgroup = isolation.as_ref().and_then(|value| value.cgroup.clone());
 
         #[cfg(unix)]
         unsafe {
@@ -516,15 +514,6 @@ impl WorkerSupervisor {
         };
         #[cfg(not(unix))]
         let mut child = spawn_result?;
-
-        #[cfg(unix)]
-        if let Some(cgroup) = cgroup
-            && let Some(pid) = child.id()
-            && let Err(error) = tako_spawn::assign_pid_to_cgroup(&cgroup, pid)
-        {
-            let _ = child.start_kill();
-            return Err(SupervisorError::Spawn(error));
-        }
 
         if let Some(sink) = &self.spec.log_sink {
             if let Some(stdout) = child.stdout.take() {

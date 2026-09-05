@@ -49,7 +49,10 @@ function expectTypescriptToPass(source: string): void {
     });
     expect(message).toBe("");
   } finally {
-    rmSync(resolve(sdkRoot, ".tmp-typecheck"), { recursive: true, force: true });
+    rmSync(resolve(sdkRoot, ".tmp-typecheck"), {
+      recursive: true,
+      force: true,
+    });
   }
 }
 
@@ -108,14 +111,14 @@ describe("Types", () => {
       const exp = defineChannel("chat", {
         paramsSchema: (t) => t.Object({ roomId: t.String() }),
         auth: { verify: async () => true },
-        handler: { msg: async (d: { text: string }) => d },
+        transport: "ws",
         replayWindowMs: 86_400_000,
         keepaliveIntervalMs: 25_000,
       }).$messageTypes<{ msg: { text: string } }>();
       const definition: ChannelDefinition = exp.definition;
 
       expect(definition.paramsSchema).toMatchObject({ type: "object" });
-      expect(definition.handler).toBeDefined();
+      expect(definition.transport).toBe("ws");
       expect(definition.replayWindowMs).toBe(86_400_000);
       expect(definition.keepaliveIntervalMs).toBe(25_000);
     });

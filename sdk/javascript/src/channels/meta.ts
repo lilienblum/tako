@@ -38,26 +38,6 @@ export interface ChannelAuthConfig<Params> {
   verify: (input: VerifyInput<Params>) => ChannelAuthResult | Promise<ChannelAuthResult>;
 }
 
-/** Context passed to WebSocket message handlers. */
-export interface ChannelHandlerContext<Params = Record<string, unknown>> {
-  /** Exact channel name handling the message. */
-  channel: string;
-  /** Operation being handled. */
-  operation: ChannelOperation;
-  /** Bound channel params. */
-  params: Params;
-  /** Authenticated subject returned by `verify`, when present. */
-  subject?: string;
-  /** Whether the message came from server-side publish or a connected client. */
-  publishedBy: "server" | "client";
-}
-
-/** Handler for one WebSocket message type. */
-export type MessageHandler<Data, Params> = (
-  data: Data,
-  ctx: ChannelHandlerContext<Params>,
-) => Data | void | Promise<Data | void>;
-
 /** Lifecycle knobs controlling replay, idle eviction, and keepalives per channel. */
 export interface ChannelLifecycleConfig {
   /** @defaultValue 600_000 (10 min) */
@@ -88,7 +68,6 @@ export type ChannelAuthScheme<Params> =
 /** Runtime metadata attached to every channel export. */
 export interface ChannelDefinition<
   Params = Record<string, unknown>,
-  Messages = Record<string, unknown>,
 > extends ChannelLifecycleConfig {
   /** Internal marker for channel definitions. */
   readonly type: typeof CHANNEL_SYMBOL;
@@ -98,9 +77,7 @@ export interface ChannelDefinition<
   readonly paramsSchema: object;
   /** Auth policy for this channel. */
   readonly auth: ChannelAuthScheme<Params>;
-  /** Optional WebSocket message handlers. Presence enables WebSocket transport. */
-  readonly handler?: { [T in keyof Messages]?: MessageHandler<Messages[T], Params> };
-  /** Live transport exposed to clients when handlers are present. */
+  /** Explicitly enable WebSocket client publishing. */
   readonly transport?: "ws";
   /** Whether this channel requires params before use. */
   readonly hasParams: boolean;
@@ -120,9 +97,9 @@ export interface ChannelHandle<Params, Messages> {
 }
 
 /** Metadata attached to channel module exports. */
-export interface ChannelExportMeta<Params, Messages> {
+export interface ChannelExportMeta<Params> {
   /** Runtime channel definition consumed by Tako discovery. */
-  readonly definition: ChannelDefinition<Params, Messages>;
+  readonly definition: ChannelDefinition<Params>;
 }
 
 /** Narrow `value` to an object with channel export metadata. */

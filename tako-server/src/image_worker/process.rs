@@ -23,6 +23,10 @@ impl ImageWorkerProcess {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        isolate_worker_command(&mut command).map_err(|error| {
+            tracing::warn!(%error, "Failed to isolate image worker");
+            ImageError::TransformFailed
+        })?;
         let mut child = command.spawn().map_err(|error| {
             tracing::warn!(
                 app = %app_name,
@@ -107,6 +111,50 @@ impl ImageWorkerProcess {
     }
 }
 
+fn isolate_worker_command(command: &mut Command) -> Result<(), String> {
+    let isolation = worker_isolation()?;
+    command
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("VIPS_CONCURRENCY", "2")
+        .current_dir("/");
+    // SAFETY: the hook only applies the shared fork-safe process policy.
+    unsafe {
+        command.pre_exec(move || tako_spawn::install_process_isolation(&isolation));
+    }
+    Ok(())
+}
+
+fn worker_isolation() -> Result<tako_spawn::ProcessIsolation, String> {
+    let mut policy = tako_spawn::ProcessIsolation {
+        resource_limits: tako_spawn::ResourceLimits {
+            open_files: Some(128),
+            processes: Some(64),
+            address_space_bytes: if cfg!(target_os = "linux") {
+                Some(2 * 1024 * 1024 * 1024)
+            } else {
+                None
+            },
+        },
+        ..Default::default()
+    };
+    if cfg!(target_os = "linux") {
+        let (uid, gid) = crate::unix::lookup_user_ids("tako-images")
+            .map_err(|e| e.to_string())?
+            .ok_or("image worker identity is not installed")?;
+        if uid == 0 || uid == unsafe { libc::geteuid() } {
+            return Err("image worker identity must differ from root and the service".into());
+        }
+        policy.user = Some(tako_spawn::UserIds {
+            uid,
+            gid,
+            supplementary_gids: Vec::new(),
+        });
+        policy.parent_death_signal = Some(libc::SIGTERM);
+    }
+    Ok(policy)
+}
+
 fn drain_worker_stderr(app_name: &str, mut stderr: ChildStderr) {
     let app_name = app_name.to_string();
     tokio::spawn(async move {
@@ -180,6 +228,44 @@ fn worker_executable_path() -> Result<std::path::PathBuf, ImageError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[ignore = "requires installed tako-images account and service SETUID/SETGID or root"]
+    async fn image_child_exec_has_private_identity_and_bounded_resources() {
+        let (uid, _) = crate::unix::lookup_user_ids("tako-images")
+            .unwrap()
+            .unwrap();
+        let mut command = Command::new("/bin/sh");
+        command
+            .env("CONTROL_PLANE_SECRET", "must-not-leak")
+            .args(["-c", "cat /proc/self/status; env; ulimit -n; ulimit -v"]);
+        isolate_worker_command(&mut command).unwrap();
+        let output = command.output().await.unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let text = String::from_utf8(output.stdout).unwrap();
+        for field in [
+            format!("Uid:\t{uid}\t{uid}\t{uid}\t{uid}"),
+            "CapEff:\t0000000000000000".into(),
+            "CapPrm:\t0000000000000000".into(),
+            "CapAmb:\t0000000000000000".into(),
+            "NoNewPrivs:\t1".into(),
+        ] {
+            assert!(text.contains(&field), "missing {field}: {text}");
+        }
+        assert_eq!(
+            text.lines()
+                .find_map(|line| line.strip_prefix("Groups:"))
+                .map(str::trim),
+            Some("")
+        );
+        assert!(!text.contains("CONTROL_PLANE_SECRET"), "{text}");
+        assert!(text.ends_with("128\n2097152\n"), "{text}");
+    }
 
     #[test]
     fn worker_stderr_snippet_is_single_line() {

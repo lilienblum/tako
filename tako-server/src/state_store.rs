@@ -69,6 +69,30 @@ impl SqliteStateStore {
     ) -> Result<parking_lot::MappedMutexGuard<'_, rusqlite::Connection>, StateStoreError> {
         let mut guard = self.conn.lock();
         if guard.is_none() {
+            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW)
+                .open(&self.path)
+                .map_err(|e| StateStoreError::Sqlite(format!("secure state database: {e}")))?;
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))
+                .map_err(|e| StateStoreError::Sqlite(format!("secure state database: {e}")))?;
+            for suffix in ["-wal", "-shm"] {
+                let sidecar = PathBuf::from(format!("{}{suffix}", self.path.display()));
+                match std::fs::OpenOptions::new()
+                    .read(true)
+                    .custom_flags(libc::O_NOFOLLOW)
+                    .open(sidecar)
+                {
+                    Ok(file) => file
+                        .set_permissions(std::fs::Permissions::from_mode(0o600))
+                        .map_err(|e| StateStoreError::Sqlite(e.to_string()))?,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+                    Err(e) => return Err(StateStoreError::Sqlite(e.to_string())),
+                }
+            }
             *guard = Some(tako_sqlite::open_local(&self.path)?);
         }
         Ok(parking_lot::MutexGuard::map(guard, |conn| {

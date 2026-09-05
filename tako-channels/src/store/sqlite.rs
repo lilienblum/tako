@@ -3,7 +3,7 @@ use std::path::Path;
 
 use crate::{ChannelAuthResponse, ChannelError, ChannelMessage, ChannelPublishPayload};
 
-use super::{channel_message_from_row, now_unix_ms};
+use super::{channel_message_from_row, now_unix_ms, resolve_replay_cursor};
 
 const INCREMENTAL_VACUUM_PAGES: i64 = 128;
 const WAL_TRUNCATE_DELETED_ROWS_THRESHOLD: usize = 1024;
@@ -53,6 +53,11 @@ impl SqliteChannelStore {
             .map_err(|e| ChannelError::BadRequest(format!("serialize payload: {e}")))?;
         let mut conn = self.conn.lock();
         let tx = conn.transaction().map_err(storage_err)?;
+        tx.execute(
+            "INSERT INTO channel_metadata (channel, replay_window_ms, inactivity_ttl_ms, keepalive_interval_ms, max_connection_lifetime_ms, last_activity_unix_ms)
+             VALUES (?1, 600000, 0, 25000, 7200000, ?2) ON CONFLICT(channel) DO NOTHING",
+            rusqlite::params![channel, now_unix_ms()],
+        ).map_err(storage_err)?;
         {
             let mut stmt = tx
                 .prepare_cached(
@@ -73,6 +78,11 @@ impl SqliteChannelStore {
         }
 
         let id = tx.last_insert_rowid();
+        tx.execute(
+            "UPDATE channel_metadata SET latest_message_id = ?2 WHERE channel = ?1",
+            rusqlite::params![channel, id],
+        )
+        .map_err(storage_err)?;
         tx.commit().map_err(storage_err)?;
 
         Ok(ChannelMessage {
@@ -124,20 +134,12 @@ impl SqliteChannelStore {
         requested: Option<i64>,
     ) -> Result<Option<i64>, ChannelError> {
         let conn = self.conn.lock();
-        let latest = message_id(&conn, channel, "MAX")?;
-        let Some(requested) = requested else {
-            return Ok(latest);
-        };
-
-        let Some(oldest) = message_id(&conn, channel, "MIN")? else {
-            return Ok(Some(requested));
-        };
-
-        if requested < oldest.saturating_sub(1) {
-            return Err(ChannelError::StaleCursor);
-        }
-
-        Ok(Some(requested))
+        let (oldest, latest) = conn.query_row(
+            "SELECT MIN(id), COALESCE(MAX(id), (SELECT NULLIF(latest_message_id, 0) FROM channel_metadata WHERE channel = ?1))
+             FROM channel_messages WHERE channel = ?1",
+            rusqlite::params![channel], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).map_err(storage_err)?;
+        resolve_replay_cursor(requested, oldest, latest)
     }
 
     pub(super) fn sync_channel(
@@ -173,17 +175,31 @@ impl SqliteChannelStore {
         )
         .map_err(storage_err)?;
 
+        Ok(())
+    }
+
+    pub(super) fn latest_id(&self) -> Result<Option<i64>, ChannelError> {
+        self.conn
+            .lock()
+            .query_row("SELECT MAX(id) FROM channel_messages", [], |row| row.get(0))
+            .map_err(storage_err)
+    }
+
+    pub(super) fn prune(&self) -> Result<(), ChannelError> {
+        let conn = self.conn.lock();
+        let now = now_unix_ms();
+
         let mut deleted_rows = 0usize;
 
-        if auth.replay_window_ms > 0 {
-            let cutoff = now - auth.replay_window_ms as i64;
-            deleted_rows += conn
+        deleted_rows += conn
                 .execute(
-                    "DELETE FROM channel_messages WHERE channel = ?1 AND created_at_unix_ms < ?2",
-                    rusqlite::params![channel, cutoff],
+                    "DELETE FROM channel_messages WHERE EXISTS (
+                        SELECT 1 FROM channel_metadata m WHERE m.channel = channel_messages.channel
+                        AND m.replay_window_ms > 0 AND channel_messages.created_at_unix_ms < (?1 - m.replay_window_ms)
+                    )",
+                    rusqlite::params![now],
                 )
                 .map_err(storage_err)?;
-        }
 
         deleted_rows += conn
             .execute(
@@ -197,14 +213,6 @@ impl SqliteChannelStore {
                 rusqlite::params![now],
             )
             .map_err(storage_err)?;
-        deleted_rows += conn
-            .execute(
-                "DELETE FROM channel_metadata
-                 WHERE inactivity_ttl_ms > 0
-                   AND last_activity_unix_ms < (?1 - inactivity_ttl_ms)",
-                rusqlite::params![now],
-            )
-            .map_err(storage_err)?;
 
         if deleted_rows > 0 {
             run_cleanup_maintenance(&conn, deleted_rows);
@@ -212,16 +220,6 @@ impl SqliteChannelStore {
 
         Ok(())
     }
-}
-
-fn message_id(
-    conn: &rusqlite::Connection,
-    channel: &str,
-    aggregate: &str,
-) -> Result<Option<i64>, ChannelError> {
-    let sql = format!("SELECT {aggregate}(id) FROM channel_messages WHERE channel = ?1");
-    conn.query_row(&sql, rusqlite::params![channel], |row| row.get(0))
-        .map_err(storage_err)
 }
 
 fn init_connection(conn: &rusqlite::Connection) -> Result<(), ChannelError> {
@@ -264,7 +262,8 @@ fn ensure_channel_metadata_schema(conn: &rusqlite::Connection) -> Result<(), Cha
                 inactivity_ttl_ms INTEGER NOT NULL,
                 keepalive_interval_ms INTEGER NOT NULL,
                 max_connection_lifetime_ms INTEGER NOT NULL,
-                last_activity_unix_ms INTEGER NOT NULL
+                last_activity_unix_ms INTEGER NOT NULL,
+                latest_message_id INTEGER NOT NULL DEFAULT 0
             );",
         )
         .map_err(storage_err)?;
@@ -279,6 +278,13 @@ fn ensure_channel_metadata_schema(conn: &rusqlite::Connection) -> Result<(), Cha
         .map_err(storage_err)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(storage_err)?;
+
+    if !columns.iter().any(|column| column == "latest_message_id") {
+        conn.execute_batch(
+            "ALTER TABLE channel_metadata ADD COLUMN latest_message_id INTEGER NOT NULL DEFAULT 0;",
+        )
+        .map_err(storage_err)?;
+    }
 
     if columns.iter().any(|column| column == "retention_ms")
         && !columns.iter().any(|column| column == "replay_window_ms")

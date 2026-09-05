@@ -10,7 +10,11 @@ import type {
   ChannelSubscribeOptions,
   ChannelSubscription,
 } from "./types";
-import { isChannelDefinition, type ChannelDefinition } from "./channels/meta";
+import {
+  isChannelDefinition,
+  type ChannelDefinition,
+  type ChannelLifecycleConfig,
+} from "./channels/meta";
 import { getChannelsConfig } from "./channels/configure";
 import { SseReader } from "./channels/sse-reader";
 
@@ -215,6 +219,7 @@ export class Channel {
     name: string,
     transport?: ChannelDefinitionTransport,
     params: Record<string, unknown> = {},
+    private readonly lifecycle?: ChannelLifecycleConfig,
   ) {
     this.name = name;
     this.transport = transport;
@@ -235,7 +240,8 @@ export class Channel {
     _options: ChannelPublishOptions = {},
   ): Promise<ChannelMessage<T>> {
     if (socketPublisher) {
-      return socketPublisher(this.name, message);
+      const payload = this.lifecycle ? { ...message, lifecycle: this.lifecycle } : message;
+      return socketPublisher(this.name, payload);
     }
 
     throw new Error(
@@ -332,8 +338,7 @@ interface RegistryEntry {
 /**
  * In-process registry of discovered channel definitions.
  *
- * The Tako runtime uses this for channel discovery, auth callbacks, and
- * WebSocket message dispatch.
+ * The Tako runtime uses this for channel discovery and auth callbacks.
  */
 export class ChannelRegistry {
   private entries: RegistryEntry[] = [];
@@ -398,7 +403,7 @@ export class ChannelRegistry {
     const matched = this.resolve(input.channel);
     if (!matched) return { ok: false };
 
-    if (input.operation === "publish" && matched.definition.handler === undefined) {
+    if (input.operation === "publish" && matched.definition.transport !== "ws") {
       return { ok: false, reason: "sse_publish_not_allowed" };
     }
 
@@ -424,7 +429,9 @@ export class ChannelRegistry {
   }
 }
 
-function definitionLifecycleConfig(definition: ChannelDefinition) {
+export function definitionLifecycleConfig(
+  definition: ChannelLifecycleConfig & { readonly transport?: "ws" },
+) {
   const config: Omit<ChannelAuthorizeResponse, "ok" | "subject" | "reason"> = {
     replayWindowMs: definition.replayWindowMs ?? DEFAULT_CHANNEL_REPLAY_WINDOW_MS,
     inactivityTtlMs: definition.inactivityTtlMs ?? DEFAULT_CHANNEL_INACTIVITY_TTL_MS,
@@ -432,7 +439,7 @@ function definitionLifecycleConfig(definition: ChannelDefinition) {
     maxConnectionLifetimeMs:
       definition.maxConnectionLifetimeMs ?? DEFAULT_CHANNEL_MAX_CONNECTION_LIFETIME_MS,
   };
-  if (definition.handler !== undefined) {
+  if (definition.transport === "ws") {
     config.transport = "ws";
   }
   return config;

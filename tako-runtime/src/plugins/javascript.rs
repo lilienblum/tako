@@ -181,13 +181,11 @@ fn pm_install_production(pm: &PackageManager) -> String {
         }
         PackageManager::Pnpm => {
             // npm ships with node (full distribution extracted). Install pnpm if needed.
-            // Falls back gracefully if workspace:* deps can't resolve on server
-            // (the build artifact includes node_modules from the local build).
-            "command -v pnpm >/dev/null 2>&1 || npm install -g pnpm 2>/dev/null; pnpm install --prod 2>/dev/null || true"
+            "(command -v pnpm >/dev/null 2>&1 || npm install -g pnpm) && pnpm install --prod"
                 .to_string()
         }
         PackageManager::Yarn => {
-            "command -v yarn >/dev/null 2>&1 || npm install -g yarn 2>/dev/null; yarn install --production 2>/dev/null || true"
+            "(command -v yarn >/dev/null 2>&1 || npm install -g yarn) && yarn install --production"
                 .to_string()
         }
     }
@@ -524,6 +522,24 @@ impl RuntimePlugin for NodePlugin {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    #[cfg(unix)]
+    fn production_install_reports_package_manager_failure() {
+        use std::os::unix::fs::PermissionsExt;
+        for pm in [super::PackageManager::Pnpm, super::PackageManager::Yarn] {
+            let dir = tempfile::tempdir().unwrap();
+            let bin = dir.path().join(pm.id());
+            std::fs::write(&bin, "#!/bin/sh\necho install-failed >&2\nexit 23\n").unwrap();
+            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let output = std::process::Command::new("/bin/sh")
+                .args(["-c", &super::pm_install_production(&pm)])
+                .env("PATH", dir.path())
+                .output()
+                .unwrap();
+            assert_eq!(output.status.code(), Some(23));
+            assert!(String::from_utf8_lossy(&output.stderr).contains("install-failed"));
+        }
+    }
     use super::*;
 
     fn default_ctx(dir: &Path) -> PluginContext<'_> {

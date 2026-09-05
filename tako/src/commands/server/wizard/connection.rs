@@ -85,12 +85,9 @@ pub(super) async fn configure_tako_server_with_service_user(
     public_ports: Option<super::ServerPublicPorts>,
 ) -> Result<(), String> {
     with_ssh(ssh_config.clone(), async |ssh| {
-        ssh.install_tako_server(
-            public_ports.map(Into::into),
-            crate::ssh::InstallServerMode::ConfigureAndStart,
-        )
-        .await
-        .map_err(|e| format!("Configure failed: {e}"))
+        ssh.configure_tako_server(public_ports.map(Into::into))
+            .await
+            .map_err(|e| format!("Configure failed: {e}"))
     })
     .await
 }

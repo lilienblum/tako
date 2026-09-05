@@ -1,6 +1,52 @@
 use super::*;
 
 #[test]
+fn replay_expires_without_subscribers_or_further_publishes() {
+    let store = ChannelStore::open_in_memory().unwrap();
+    let auth: ChannelAuthResponse = serde_json::from_value(serde_json::json!({
+        "ok": true, "replayWindowMs": 20
+    }))
+    .unwrap();
+    store.sync_channel("idle", &auth).unwrap();
+    let first = store
+        .append(
+            "idle",
+            &ChannelPublishPayload {
+                r#type: "event".into(),
+                data: serde_json::json!(1),
+            },
+        )
+        .unwrap();
+    let last = store
+        .append(
+            "idle",
+            &ChannelPublishPayload {
+                r#type: "event".into(),
+                data: serde_json::json!(2),
+            },
+        )
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+    assert!(store.read_after("idle", None, 100).unwrap().is_empty());
+    assert!(matches!(
+        store.replay_cursor("idle", first.id.parse().ok()),
+        Err(ChannelError::StaleCursor)
+    ));
+    assert_eq!(
+        store.replay_cursor("idle", last.id.parse().ok()).unwrap(),
+        last.id.parse().ok()
+    );
+    assert_eq!(
+        store.replay_cursor("idle", None).unwrap(),
+        last.id.parse().ok()
+    );
+    assert!(matches!(
+        store.replay_cursor("unknown", Some(1)),
+        Err(ChannelError::StaleCursor)
+    ));
+}
+
+#[test]
 fn parse_channel_route_rejects_invalid_paths() {
     assert!(matches!(
         parse_channel_route("/_tako/channels/"),
@@ -117,6 +163,7 @@ fn auth_scheme_deserializes_false_or_object() {
 #[test]
 fn channel_def_meta_serializes_params_schema_inline() {
     let meta = ChannelDefinitionMeta {
+        lifecycle: Default::default(),
         channel: "chat".into(),
         params_schema: serde_json::json!({
             "type": "object",
@@ -237,6 +284,97 @@ fn postgres_channel_store_round_trips_when_url_is_set() {
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].id, second.id);
     assert_eq!(messages[0].data, serde_json::json!({ "text": "there" }));
+}
+
+#[test]
+fn postgres_concurrent_publishers_share_changes_order_and_retention() {
+    let Ok(url) = std::env::var("TAKO_TEST_POSTGRES_URL") else {
+        return;
+    };
+    let app = format!("concurrent-channel-test/{}", std::process::id());
+    let reader = ChannelStore::open_postgres(&url, &app).unwrap();
+    let writers: Vec<_> = (0..2)
+        .map(|_| ChannelStore::open_postgres(&url, &app).unwrap())
+        .collect();
+    let mut changes = reader.changes();
+    let initial = reader.replay_cursor("events", None).unwrap();
+    let handles: Vec<_> = writers
+        .into_iter()
+        .enumerate()
+        .map(|(writer, store)| {
+            std::thread::spawn(move || {
+                for index in 0..100 {
+                    store
+                        .append(
+                            "events",
+                            &ChannelPublishPayload {
+                                r#type: "event".into(),
+                                data: serde_json::json!([writer, index]),
+                            },
+                        )
+                        .unwrap();
+                }
+            })
+        })
+        .collect();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut after = initial;
+    let mut received = Vec::new();
+    while received.len() < 200 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "concurrent publisher replay lost messages"
+        );
+        for message in reader.read_after("events", after, 25).unwrap() {
+            let id = message.id.parse::<i64>().unwrap();
+            assert!(after.is_none_or(|previous| id > previous));
+            after = Some(id);
+            received.push(message.data);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    for handle in handles {
+        handle.join().unwrap();
+    }
+    while !changes.has_changed().unwrap() {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    changes.borrow_and_update();
+    drop(changes);
+    let auth: ChannelAuthResponse =
+        serde_json::from_value(serde_json::json!({ "ok": true, "replayWindowMs": 20 })).unwrap();
+    reader.sync_channel("expires", &auth).unwrap();
+    let expired = reader
+        .append(
+            "expires",
+            &ChannelPublishPayload {
+                r#type: "event".into(),
+                data: serde_json::json!(1),
+            },
+        )
+        .unwrap();
+    let latest = reader
+        .append(
+            "expires",
+            &ChannelPublishPayload {
+                r#type: "event".into(),
+                data: serde_json::json!(2),
+            },
+        )
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+    assert!(reader.read_after("expires", None, 100).unwrap().is_empty());
+    assert!(matches!(
+        reader.replay_cursor("expires", expired.id.parse().ok()),
+        Err(ChannelError::StaleCursor)
+    ));
+    assert_eq!(
+        reader
+            .replay_cursor("expires", latest.id.parse().ok())
+            .unwrap(),
+        latest.id.parse().ok()
+    );
 }
 
 #[test]
@@ -365,7 +503,12 @@ fn channel_store_persists_lifecycle_and_prunes_inactive_channels() {
             },
         )
         .unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(5));
+    let payload = ChannelPublishPayload {
+        r#type: "event".into(),
+        data: serde_json::json!(1),
+    };
+    store.append("chat:room-123", &payload).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(1200));
     store
         .sync_channel(
             "chat:room-456",
@@ -381,10 +524,68 @@ fn channel_store_persists_lifecycle_and_prunes_inactive_channels() {
         )
         .unwrap();
 
-    let channels =
-        store.raw_query_strings("SELECT channel FROM channel_metadata ORDER BY channel ASC");
+    store.append("chat:room-456", &payload).unwrap();
+    assert!(
+        store
+            .read_after("chat:room-123", None, 100)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        store.read_after("chat:room-456", None, 100).unwrap().len(),
+        1
+    );
+    // Publishing again uses the known lifecycle even after inactivity eviction.
+    store.append("chat:room-123", &payload).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+    assert!(
+        store
+            .read_after("chat:room-123", None, 100)
+            .unwrap()
+            .is_empty()
+    );
+}
 
-    assert_eq!(channels, vec!["chat:room-456".to_string()]);
+#[test]
+fn subscribers_observe_external_writers_and_recover_batched_replay() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let path = temp.path().join("channels.sqlite");
+    let reader = ChannelStore::open(&path).unwrap();
+    let writer = ChannelStore::open(&path).unwrap();
+    let mut subscribers: Vec<_> = (0..32).map(|_| reader.changes()).collect();
+    for index in 0..150 {
+        writer
+            .append(
+                "chat",
+                &ChannelPublishPayload {
+                    r#type: "event".into(),
+                    data: serde_json::json!(index),
+                },
+            )
+            .unwrap();
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while subscribers
+        .iter()
+        .any(|subscriber| !subscriber.has_changed().unwrap())
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "subscribers did not observe external publishes"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    for subscriber in &mut subscribers {
+        subscriber.borrow_and_update();
+    }
+    let first = reader.read_after("chat", None, 100).unwrap();
+    let second = reader
+        .read_after("chat", first.last().unwrap().id.parse().ok(), 100)
+        .unwrap();
+    assert_eq!(first.len(), 100);
+    assert_eq!(second.len(), 50);
+    assert_eq!(first[0].data, serde_json::json!(0));
+    assert_eq!(second[49].data, serde_json::json!(149));
 }
 
 #[test]

@@ -93,16 +93,15 @@ fn resolve_binary_from_env(binary: &str, env: &HashMap<String, String>) -> Strin
 /// always created, even with empty secrets — every Tako-managed process
 /// has a bootstrap fd. The envelope shape itself lives in
 /// `tako_core::bootstrap` so the workflows supervisor produces byte-for-byte
-/// the same payload. See `tako_spawn::create_payload_pipe` for the
-/// CLOEXEC/writer-thread semantics.
+/// the same payload. The parent writes asynchronously under the startup deadline.
 #[cfg(unix)]
 pub(super) fn create_bootstrap_pipe(
     token: &str,
     secrets: &HashMap<String, String>,
     storages: &HashMap<String, tako_core::StorageBinding>,
-) -> std::io::Result<(OwnedFd, std::thread::JoinHandle<std::io::Result<()>>)> {
+) -> std::io::Result<(OwnedFd, super::bootstrap::BootstrapWriter)> {
     let bytes = tako_core::bootstrap::envelope_bytes(token, secrets, storages);
-    tako_spawn::create_payload_pipe(bytes)
+    super::bootstrap::pipe(bytes)
 }
 
 #[cfg(unix)]
@@ -179,11 +178,14 @@ pub(super) fn spawn_child_process(
     #[cfg(unix)] isolation: ProcessIsolation,
     token: &str,
     secrets: &HashMap<String, String>,
-) -> std::io::Result<(tokio::process::Child, Option<OwnedFd>)> {
+) -> std::io::Result<(
+    tokio::process::Child,
+    Option<OwnedFd>,
+    super::bootstrap::BootstrapWriter,
+)> {
     // Bootstrap pipe on fd 3: always present, carries `{token, secrets}`.
     // The OwnedFd must stay alive until after spawn (fork copies the fd table).
-    // The writer thread owns the write end; it drains in parallel with the child
-    // so large envelopes don't deadlock the parent on pipe-buffer backpressure.
+    // Return the writer so delivery runs asynchronously under the startup timeout.
     let (bootstrap_pipe, bootstrap_writer) =
         create_bootstrap_pipe(token, secrets, &config.storages)?;
     #[cfg(unix)]
@@ -198,8 +200,6 @@ pub(super) fn spawn_child_process(
     #[cfg(not(unix))]
     let readiness_raw_fd = None;
 
-    #[cfg(unix)]
-    let cgroup = isolation.cgroup.clone();
     let mut child_cmd = build_child_command(
         config,
         env,
@@ -210,45 +210,21 @@ pub(super) fn spawn_child_process(
         readiness_raw_fd,
     )?;
     let spawn_result = child_cmd.spawn();
+    drop(bootstrap_pipe);
 
     match spawn_result {
-        Ok(mut child) => {
-            #[cfg(unix)]
-            if let Some(cgroup) = cgroup
-                && let Some(pid) = child.id()
-                && let Err(error) = tako_spawn::assign_pid_to_cgroup(&cgroup, pid)
-            {
-                let _ = child.start_kill();
-                return Err(error);
-            }
+        Ok(child) => {
             #[cfg(unix)]
             {
                 drop(readiness_write_end);
-                // Join the bootstrap writer now that the child is draining fd 3.
-                // Surface any write error; otherwise the child would see a short
-                // payload and fail with a confusing parse error at startup.
-                join_bootstrap_writer(bootstrap_writer)?;
-                Ok((child, Some(readiness_read_end)))
+                Ok((child, Some(readiness_read_end), bootstrap_writer))
             }
             #[cfg(not(unix))]
             {
-                Ok((child, None))
+                Ok((child, None, bootstrap_writer))
             }
         }
-        Err(error) => {
-            // Spawn failed; the writer thread may still be blocked on a full
-            // pipe buffer waiting for a reader that will never come. Dropping
-            // the read end closes the read side, so the writer gets EPIPE and
-            // exits. We then join to reap the thread.
-            #[cfg(unix)]
-            {
-                drop(bootstrap_pipe);
-                drop(readiness_write_end);
-                drop(readiness_read_end);
-                let _ = bootstrap_writer.join();
-            }
-            Err(error)
-        }
+        Err(error) => Err(error),
     }
     // The parent-owned pipe ends drop here after spawn, leaving the child with
     // only the ABI fds it needs across exec.
@@ -325,14 +301,4 @@ pub(super) fn spawn_container_process_with_engine(
         child_cmd.env(key, value);
     }
     child_cmd.spawn()
-}
-
-#[cfg(unix)]
-fn join_bootstrap_writer(
-    handle: std::thread::JoinHandle<std::io::Result<()>>,
-) -> std::io::Result<()> {
-    match handle.join() {
-        Ok(result) => result,
-        Err(_) => Err(std::io::Error::other("bootstrap writer thread panicked")),
-    }
 }

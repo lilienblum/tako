@@ -128,6 +128,7 @@ pub(crate) fn chown_path(path: &Path, uid: u32, gid: u32) -> io::Result<()> {
     Ok(())
 }
 
+#[cfg(not(target_os = "linux"))]
 pub(crate) fn lchown_path(path: &Path, uid: u32, gid: u32) -> io::Result<()> {
     let path = CString::new(path.as_os_str().as_bytes()).map_err(|_| {
         io::Error::new(

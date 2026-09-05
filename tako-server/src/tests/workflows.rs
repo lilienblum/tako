@@ -252,18 +252,20 @@ async fn sync_app_workflows_injects_release_env_and_app_data_dir_into_worker() {
         .expect("release with workflows should register worker supervisor");
     supervisor.wake().unwrap();
 
-    let captured = (0..50)
-        .find_map(|_| {
+    let captured = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
             let value = std::fs::read_to_string(&env_capture).ok();
             if let Some(value) = value
                 && !value.trim().is_empty()
             {
-                return Some(value);
+                return value;
             }
-            std::thread::sleep(Duration::from_millis(10));
-            None
-        })
-        .expect("worker should record its environment");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    state.workflows.retire(app_id).await;
+    let captured = captured.expect("worker should record its environment");
     let expected_data_dir = temp
         .path()
         .join("apps")

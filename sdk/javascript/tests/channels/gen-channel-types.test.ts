@@ -21,9 +21,7 @@ describe("gen-channel-types", () => {
             roomId: t.String(),
             limit: t.Optional(t.Integer()),
           }),
-          handler: {
-            "chat.send": (data) => data,
-          },
+          transport: "ws",
         }).$messageTypes<{ "chat.send": { text: string } }>();
       `,
     );

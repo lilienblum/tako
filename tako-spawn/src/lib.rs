@@ -65,7 +65,7 @@ impl Default for ProcessIsolation {
     }
 }
 
-pub fn assign_pid_to_cgroup(cgroup: &CgroupAssignment, pid: u32) -> std::io::Result<()> {
+fn assign_pid_to_cgroup(cgroup: &CgroupAssignment, pid: u32) -> std::io::Result<()> {
     std::fs::write(cgroup.path.join("cgroup.procs"), format!("{pid}\n"))
 }
 
@@ -88,12 +88,71 @@ pub unsafe fn install_process_isolation(isolation: &ProcessIsolation) -> std::io
         set_no_new_privs()?;
     }
     if let Some(cgroup) = &isolation.cgroup {
+        #[cfg(target_os = "linux")]
+        if isolation.user.is_some() {
+            // CAP_SETUID is already required to switch app identities. Cgroup v2
+            // also checks the common ancestor when migrating between subtrees.
+            // Use root only for this write; no untrusted code runs until the
+            // mandatory identity/capability drop below has succeeded.
+            if unsafe { libc::seteuid(0) } == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+        }
         let pid = unsafe { libc::getpid() } as u32;
-        assign_pid_to_cgroup(cgroup, pid)?;
-    }
-    if let Some(user) = &isolation.user {
+        let assignment = assign_pid_to_cgroup(cgroup, pid);
+        if let Some(user) = &isolation.user {
+            drop_to_user(user)?;
+        }
+        assignment?;
+    } else if let Some(user) = &isolation.user {
         drop_to_user(user)?;
     }
+    // Changing uid/gid clears PDEATHSIG on Linux, so arm it after dropping identity.
+    install_parent_death_signal(isolation.parent_death_signal)?;
+    if isolation.clear_ambient_capabilities {
+        clear_process_capabilities()?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn clear_process_capabilities() -> std::io::Result<()> {
+    #[repr(C)]
+    struct Header {
+        version: u32,
+        pid: i32,
+    }
+    #[repr(C)]
+    struct Data {
+        effective: u32,
+        permitted: u32,
+        inheritable: u32,
+    }
+    let header = Header {
+        version: 0x2008_0522,
+        pid: 0,
+    };
+    let data = [
+        Data {
+            effective: 0,
+            permitted: 0,
+            inheritable: 0,
+        },
+        Data {
+            effective: 0,
+            permitted: 0,
+            inheritable: 0,
+        },
+    ];
+    // SAFETY: capset v3 consumes a header and exactly two capability words.
+    if unsafe { libc::syscall(libc::SYS_capset, &header, data.as_ptr()) } == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn clear_process_capabilities() -> std::io::Result<()> {
     Ok(())
 }
 
@@ -267,6 +326,138 @@ mod tests {
     use std::process::{Command, Stdio};
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn isolated_child_exec_has_no_authority_and_enforces_limits() {
+        let mut isolation = ProcessIsolation {
+            resource_limits: ResourceLimits {
+                open_files: Some(128),
+                processes: Some(64),
+                address_space_bytes: Some(512 * 1024 * 1024),
+            },
+            ..Default::default()
+        };
+        let expected_uid = if unsafe { libc::geteuid() } == 0 {
+            isolation.user = Some(UserIds {
+                uid: 65534,
+                gid: 65534,
+                supplementary_gids: vec![],
+            });
+            65534
+        } else {
+            unsafe { libc::geteuid() }
+        };
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "cat /proc/self/status; ulimit -n; ulimit -v"]);
+        unsafe {
+            command.pre_exec(move || install_process_isolation(&isolation));
+        }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let status = String::from_utf8(output.stdout).unwrap();
+        for field in [
+            "CapInh:\t0000000000000000",
+            "CapPrm:\t0000000000000000",
+            "CapEff:\t0000000000000000",
+            "CapAmb:\t0000000000000000",
+            "NoNewPrivs:\t1",
+        ] {
+            assert!(status.contains(field), "missing {field}: {status}");
+        }
+        assert!(
+            status.contains(&format!(
+                "Uid:\t{expected_uid}\t{expected_uid}\t{expected_uid}\t{expected_uid}"
+            )),
+            "{status}"
+        );
+        assert!(status.ends_with("128\n524288\n"), "{status}");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires root and TAKO_TEST_CGROUP in a private writable cgroup namespace"]
+    fn service_child_joins_cgroup_before_dropping_all_authority() {
+        let path = PathBuf::from(std::env::var("TAKO_TEST_CGROUP").expect("test cgroup"));
+        let isolation = ProcessIsolation {
+            user: Some(UserIds {
+                uid: 65534,
+                gid: 65534,
+                supplementary_gids: vec![],
+            }),
+            cgroup: Some(CgroupAssignment { path: path.clone() }),
+            ..Default::default()
+        };
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "cat /proc/self/cgroup; cat /proc/self/status"]);
+        unsafe {
+            command.pre_exec(move || {
+                // Reproduce the non-root service with only SETUID and SETGID.
+                #[repr(C)]
+                struct Header {
+                    version: u32,
+                    pid: i32,
+                }
+                #[repr(C)]
+                struct Data {
+                    effective: u32,
+                    permitted: u32,
+                    inheritable: u32,
+                }
+                if libc::prctl(libc::PR_SET_KEEPCAPS, 1, 0, 0, 0) != 0
+                    || libc::setgroups(0, std::ptr::null()) != 0
+                    || libc::setresgid(65533, 65533, 65533) != 0
+                    || libc::setresuid(65533, 65533, 65533) != 0
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
+                let header = Header {
+                    version: 0x2008_0522,
+                    pid: 0,
+                };
+                let data = [
+                    Data {
+                        effective: 192,
+                        permitted: 192,
+                        inheritable: 0,
+                    },
+                    Data {
+                        effective: 0,
+                        permitted: 0,
+                        inheritable: 0,
+                    },
+                ];
+                if libc::syscall(libc::SYS_capset, &header, data.as_ptr()) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                install_process_isolation(&isolation)
+            });
+        }
+        let output = command.output().expect("spawn isolated service child");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let status = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            status.contains(path.file_name().unwrap().to_str().unwrap()),
+            "{status}"
+        );
+        for field in [
+            "Uid:\t65534\t65534\t65534\t65534",
+            "CapEff:\t0000000000000000",
+            "CapPrm:\t0000000000000000",
+            "CapAmb:\t0000000000000000",
+            "NoNewPrivs:\t1",
+        ] {
+            assert!(status.contains(field), "missing {field}: {status}");
+        }
+    }
 
     #[test]
     fn set_cloexec_flags_the_fd() {

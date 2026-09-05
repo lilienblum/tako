@@ -203,8 +203,15 @@ fn spawn_inner(
             tokio::select! {
                 _ = &mut rx => break,
                 _ = tokio::time::sleep(Duration::from_secs(1)) => {
-                    let now_ms = chrono::Utc::now().timestamp_millis();
-                    tick_and_reclaim(&db, now_ms, &*on_enqueue, limiter.as_deref());
+                    let db = db.clone();
+                    let on_enqueue = on_enqueue.clone();
+                    let limiter = limiter.clone();
+                    if let Err(error) = crate::blocking::run(move || {
+                        let now_ms = chrono::Utc::now().timestamp_millis();
+                        tick_and_reclaim(&db, now_ms, &*on_enqueue, limiter.as_deref());
+                    }).await {
+                        tracing::error!(%error, "Workflow cron tick failed");
+                    }
                 }
             }
         }

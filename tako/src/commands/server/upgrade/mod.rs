@@ -19,15 +19,12 @@ use task_tree::{Step, UpgradeTaskTreeController, should_use_upgrade_task_tree};
 pub(super) const UPGRADE_SOCKET_WAIT_TIMEOUT: Duration = Duration::from_secs(120);
 const UPGRADE_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const SERVER_BINARY_PATH: &str = "/usr/local/bin/tako-server";
-const SERVER_PREVIOUS_BINARY_PATH: &str = "/usr/local/bin/tako-server.prev";
-const SERVER_FILE_CAPABILITIES: &str = "cap_net_bind_service,cap_setuid,cap_setgid,cap_kill=+ep";
 
 const REPO_OWNER: &str = "tako-sh";
 const REPO_NAME: &str = "tako";
 const LATEST_TAG: &str = "latest";
 const SERVER_CHECKSUM_MANIFEST_ASSET: &str = "tako-server-sha256s.txt";
 const SERVER_CHECKSUM_SIGNATURE_ASSET: &str = "tako-server-sha256s.txt.sig";
-const ALLOW_INSECURE_DOWNLOAD_BASE_ENV: &str = "TAKO_ALLOW_INSECURE_DOWNLOAD_BASE";
 const SERVER_RELEASE_SIGNING_PUBLIC_KEY_PEM: &str = "-----BEGIN PUBLIC KEY-----\n\
 MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAuSti08sNCTG7S1oGDSB3\n\
 vThbzAfQQzGq+wQjVkjN1VEPFk21eWqYMEAN2jU3FhTZDrsfl5iEMv1NsE6bimjd\n\
@@ -63,67 +60,6 @@ fn first_non_empty_line(value: &str) -> Option<&str> {
 
 fn server_binary_archive_name(target: &crate::config::ServerTarget) -> String {
     format!("tako-server-linux-{}-{}.tar.zst", target.arch, target.libc)
-}
-
-fn parse_boolish_env(value: &str) -> bool {
-    matches!(
-        value.trim().to_ascii_lowercase().as_str(),
-        "1" | "true" | "yes" | "on"
-    )
-}
-
-fn allow_insecure_download_base() -> bool {
-    std::env::var(ALLOW_INSECURE_DOWNLOAD_BASE_ENV)
-        .map(|value| parse_boolish_env(&value))
-        .unwrap_or(false)
-}
-
-fn validate_download_base(base: &str, allow_insecure: bool) -> Result<(), String> {
-    if base.starts_with("https://") {
-        return Ok(());
-    }
-    if allow_insecure {
-        output::warning(&format!(
-            "Using insecure download base '{}'; this is intended only for local testing.",
-            base
-        ));
-        return Ok(());
-    }
-    Err(format!(
-        "TAKO_DOWNLOAD_BASE_URL must use https://. Set {ALLOW_INSECURE_DOWNLOAD_BASE_ENV}=1 to allow an insecure override for local testing."
-    ))
-}
-
-fn server_download_base(custom_base: Option<&str>, allow_insecure: bool) -> Result<String, String> {
-    let base = if let Some(raw) = custom_base {
-        let trimmed = raw.trim().trim_end_matches('/');
-        if trimmed.is_empty() {
-            default_download_base()
-        } else {
-            validate_download_base(trimmed, allow_insecure)?;
-            trimmed.to_string()
-        }
-    } else if let Ok(env_base) = std::env::var("TAKO_DOWNLOAD_BASE_URL") {
-        let trimmed = env_base.trim().trim_end_matches('/');
-        if trimmed.is_empty() {
-            default_download_base()
-        } else {
-            validate_download_base(trimmed, allow_insecure)?;
-            trimmed.to_string()
-        }
-    } else {
-        default_download_base()
-    };
-    Ok(base)
-}
-
-fn server_binary_download_url(
-    target: &crate::config::ServerTarget,
-    custom_base: Option<&str>,
-    allow_insecure: bool,
-) -> Result<String, String> {
-    let base = server_download_base(custom_base, allow_insecure)?;
-    Ok(format!("{}/{}", base, server_binary_archive_name(target)))
 }
 
 fn default_download_base() -> String {
@@ -199,27 +135,24 @@ async fn fetch_release_bytes(url: &str) -> Result<Vec<u8>, String> {
 async fn resolve_verified_server_release_asset(
     target: &crate::config::ServerTarget,
 ) -> Result<VerifiedReleaseAsset, String> {
-    let allow_insecure = allow_insecure_download_base();
     let custom_base = std::env::var("TAKO_DOWNLOAD_BASE_URL").ok();
-    let custom_base_ref = custom_base.as_deref();
-    let base = server_download_base(custom_base_ref, allow_insecure)?;
-    let is_custom_source = custom_base_ref
-        .map(|b| !b.trim().is_empty())
-        .unwrap_or(false);
+    if custom_base
+        .as_deref()
+        .is_some_and(|base| !base.trim().is_empty())
+    {
+        return Err(
+            "Server upgrades use official releases. Install custom builds as administrator."
+                .to_string(),
+        );
+    }
+    let base = default_download_base();
     let archive_name = server_binary_archive_name(target);
-    let download_url = server_binary_download_url(target, custom_base_ref, allow_insecure)?;
+    let download_url = format!("{base}/{archive_name}");
     let manifest_url = format!("{base}/{SERVER_CHECKSUM_MANIFEST_ASSET}");
     let manifest = fetch_release_bytes(&manifest_url).await?;
-    if is_custom_source {
-        output::warning(
-            "Skipping release signature verification because TAKO_DOWNLOAD_BASE_URL is set. \
-             Checksums will still be verified after download.",
-        );
-    } else {
-        let signature_url = format!("{base}/{SERVER_CHECKSUM_SIGNATURE_ASSET}");
-        let signature = fetch_release_bytes(&signature_url).await?;
-        verify_signed_server_checksum_manifest(&manifest, &signature)?;
-    }
+    let signature_url = format!("{base}/{SERVER_CHECKSUM_SIGNATURE_ASSET}");
+    let signature = fetch_release_bytes(&signature_url).await?;
+    verify_signed_server_checksum_manifest(&manifest, &signature)?;
     let manifest_text = std::str::from_utf8(&manifest)
         .map_err(|e| format!("signed checksum manifest was not valid UTF-8: {e}"))?;
     let expected_sha256 = parse_sha256_manifest_value(manifest_text, &archive_name)?;
@@ -229,176 +162,20 @@ async fn resolve_verified_server_release_asset(
     })
 }
 
-fn verify_downloaded_sha256_script(path_expr: &str, expected_sha256: &str) -> String {
-    let expected_sha256 = crate::shell::shell_single_quote(expected_sha256);
-    format!(
-        "expected_sha={expected_sha256}; \
-         actual_sha=''; \
-         if command -v sha256sum >/dev/null 2>&1; then \
-           actual_sha=$(sha256sum {path_expr} | awk '{{print $1}}'); \
-         elif command -v shasum >/dev/null 2>&1; then \
-           actual_sha=$(shasum -a 256 {path_expr} | awk '{{print $1}}'); \
-         elif command -v openssl >/dev/null 2>&1; then \
-           actual_sha=$(openssl dgst -sha256 {path_expr} | awk '{{print $NF}}'); \
-         else \
-           echo 'error: sha256 tool not found' >&2; exit 1; \
-         fi; \
-         if [ \"$actual_sha\" != \"$expected_sha\" ]; then \
-           echo \"error: sha256 mismatch (expected=$expected_sha actual=$actual_sha)\" >&2; exit 1; \
-         fi"
-    )
-}
-
-fn remote_install_libvips_runtime_script() -> &'static str {
-    "if command -v apt-get >/dev/null 2>&1; then \
-       apt-get update -y; \
-       apt_avif_pkgs=; \
-       for apt_avif_pkg in libheif-plugin-aomenc libheif-plugin-aomdec libheif-plugin-dav1d; do \
-         if apt-cache show \"$apt_avif_pkg\" >/dev/null 2>&1; then apt_avif_pkgs=\"$apt_avif_pkgs $apt_avif_pkg\"; fi; \
-       done; \
-       apt_vips_installed=0; \
-       for apt_vips_pkg in libvips42t64 libvips42 libvips; do \
-         if apt-get install -y \"$apt_vips_pkg\" $apt_avif_pkgs; then apt_vips_installed=1; break; fi; \
-       done; \
-       if [ \"$apt_vips_installed\" -ne 1 ]; then exit 1; fi; \
-     elif command -v dnf >/dev/null 2>&1; then \
-       dnf install -y vips || (dnf install -y epel-release && dnf install -y vips); \
-     elif command -v yum >/dev/null 2>&1; then \
-       yum install -y vips || (yum install -y epel-release && yum install -y vips); \
-     elif command -v pacman >/dev/null 2>&1; then \
-       pacman -Sy --noconfirm vips; \
-     elif command -v apk >/dev/null 2>&1; then \
-       apk add --no-cache vips vips-heif; \
-     elif command -v zypper >/dev/null 2>&1; then \
-       zypper --non-interactive install libvips42 || zypper --non-interactive install vips; \
-     else \
-       echo 'error: unsupported package manager; install libvips manually before upgrading tako-server' >&2; exit 1; \
-     fi"
-}
-
-fn remote_install_podman_runtime_script() -> &'static str {
-    "if command -v podman >/dev/null 2>&1; then \
-       :; \
-     elif command -v apt-get >/dev/null 2>&1; then \
-       apt-get update -y; apt-get install -y podman; \
-     elif command -v dnf >/dev/null 2>&1; then \
-       dnf install -y podman; \
-     elif command -v yum >/dev/null 2>&1; then \
-       yum install -y podman; \
-     elif command -v pacman >/dev/null 2>&1; then \
-       pacman -Sy --noconfirm podman; \
-     elif command -v apk >/dev/null 2>&1; then \
-       apk add --no-cache podman; \
-     elif command -v zypper >/dev/null 2>&1; then \
-       zypper --non-interactive install podman; \
-     else \
-       echo 'error: unsupported package manager; install podman manually before upgrading tako-server' >&2; exit 1; \
-     fi; \
-     if ! command -v podman >/dev/null 2>&1; then \
-       echo 'error: podman not found after install' >&2; exit 1; \
-     fi"
-}
-
-fn remote_verify_server_runtime_deps_script(binary_expr: &str) -> String {
-    format!(
-        "missing_runtime_libraries() {{ \
-           if ! command -v ldd >/dev/null 2>&1; then return 0; fi; \
-           ldd \"$1\" 2>&1 | awk '/not found/ {{ print $1 }} /Error loading shared library/ {{ lib = $5; sub(/:$/, \"\", lib); print lib }}' || true; \
-         }}; \
-         missing_runtime_libs=$(missing_runtime_libraries {binary_expr}); \
-         if [ -n \"$missing_runtime_libs\" ]; then \
-           if printf '%s\\n' \"$missing_runtime_libs\" | grep -Eq '^libvips(\\.|$)'; then \
-             {}; \
-             missing_runtime_libs=$(missing_runtime_libraries {binary_expr}); \
-           fi; \
-         fi; \
-         if [ -n \"$missing_runtime_libs\" ]; then \
-           echo 'error: tako-server is missing runtime libraries:' >&2; \
-           printf '%s\\n' \"$missing_runtime_libs\" >&2; \
-           exit 1; \
-         fi",
-        remote_install_libvips_runtime_script()
-    )
-}
-
 fn remote_binary_replace_command(url: &str, expected_sha256: &str) -> String {
-    use crate::shell::shell_single_quote;
-    let url_q = shell_single_quote(url);
-    let sha_check = verify_downloaded_sha256_script("\"$archive\"", expected_sha256);
-    let auth_header_script = crate::github::remote_curl_auth_header_script("download_url");
-    let runtime_deps = remote_verify_server_runtime_deps_script("\"$bin\"");
-    let podman_runtime = remote_install_podman_runtime_script();
-    let script = format!(
-        "set -eu; \
-         download_url={url_q}; \
-         {auth_header_script}; \
-         tmp=$(mktemp -d); \
-         archive=\"$tmp/tako-server.tar.zst\"; \
-         trap 'rm -rf \"$tmp\"' EXIT; \
-         if [ -n \"$auth_header\" ]; then \
-           curl -fsSL -H \"$auth_header\" \"$download_url\" -o \"$archive\"; \
-         else \
-           curl -fsSL \"$download_url\" -o \"$archive\"; \
-         fi; \
-         {sha_check}; \
-         zstd -d \"$archive\" --stdout | tar -x -C \"$tmp\"; \
-         bin=$(find \"$tmp\" -type f -name tako-server | head -n 1); \
-         if [ -z \"$bin\" ]; then echo 'error: archive did not contain tako-server binary' >&2; exit 1; fi; \
-         {runtime_deps}; \
-         {podman_runtime}; \
-         if [ -f {SERVER_BINARY_PATH} ]; then install -m 0755 {SERVER_BINARY_PATH} {SERVER_PREVIOUS_BINARY_PATH}; fi; \
-         install -m 0755 \"$bin\" {SERVER_BINARY_PATH}; \
-         if command -v setcap >/dev/null 2>&1; then setcap {SERVER_FILE_CAPABILITIES} {SERVER_BINARY_PATH} 2>/dev/null || true; fi"
-    );
-    SshClient::run_with_root_or_sudo(&script)
-}
-
-#[cfg(test)]
-fn remote_binary_replace_uploaded_archive_command(path: &str, expected_sha256: &str) -> String {
-    use crate::shell::shell_single_quote;
-    let path_q = shell_single_quote(path);
-    let sha_check = verify_downloaded_sha256_script("\"$archive\"", expected_sha256);
-    let runtime_deps = remote_verify_server_runtime_deps_script("\"$bin\"");
-    let podman_runtime = remote_install_podman_runtime_script();
-    let script = format!(
-        "set -eu; \
-         archive={path_q}; \
-         tmp=$(mktemp -d); \
-         trap 'rm -rf \"$tmp\"' EXIT; \
-         {sha_check}; \
-         zstd -d \"$archive\" --stdout | tar -x -C \"$tmp\"; \
-         bin=$(find \"$tmp\" -type f -name tako-server | head -n 1); \
-         if [ -z \"$bin\" ]; then echo 'error: archive did not contain tako-server binary' >&2; exit 1; fi; \
-         {runtime_deps}; \
-         {podman_runtime}; \
-         if [ -f {SERVER_BINARY_PATH} ]; then install -m 0755 {SERVER_BINARY_PATH} {SERVER_PREVIOUS_BINARY_PATH}; fi; \
-         install -m 0755 \"$bin\" {SERVER_BINARY_PATH}; \
-         if command -v setcap >/dev/null 2>&1; then setcap {SERVER_FILE_CAPABILITIES} {SERVER_BINARY_PATH} 2>/dev/null || true; fi"
-    );
-    run_with_root_or_sudo_without_env_for_tests(&script)
-}
-
-#[cfg(test)]
-fn run_with_root_or_sudo_without_env_for_tests(shell_script: &str) -> String {
-    let escaped = shell_script.replace('\'', "'\\''");
-    format!(
-        "if [ \"$(id -u)\" -eq 0 ]; then sh -c '{0}'; elif command -v sudo >/dev/null 2>&1; then sudo sh -c '{0}'; else echo \"error: this operation requires root privileges (run as root or install/configure sudo)\" >&2; exit 1; fi",
-        escaped
-    )
+    let archive_name = crate::shell::shell_single_quote(url.rsplit('/').next().unwrap_or(""));
+    let expected_sha256 = crate::shell::shell_single_quote(expected_sha256);
+    SshClient::run_as_root(&format!(
+        "/usr/local/bin/tako-server-install-refresh {archive_name} {expected_sha256}"
+    ))
 }
 
 fn remote_restore_previous_binary_command() -> String {
-    let script = format!(
-        "set -eu; \
-         if [ ! -f {SERVER_PREVIOUS_BINARY_PATH} ]; then echo 'error: previous tako-server binary not found' >&2; exit 1; fi; \
-         install -m 0755 {SERVER_PREVIOUS_BINARY_PATH} {SERVER_BINARY_PATH}; \
-         if command -v setcap >/dev/null 2>&1; then setcap {SERVER_FILE_CAPABILITIES} {SERVER_BINARY_PATH} 2>/dev/null || true; fi"
-    );
-    SshClient::run_with_root_or_sudo(&script)
+    SshClient::run_as_root("/usr/local/bin/tako-server-service rollback")
 }
 
 fn remote_cleanup_previous_binary_command() -> String {
-    SshClient::run_with_root_or_sudo(&format!("rm -f {SERVER_PREVIOUS_BINARY_PATH}"))
+    SshClient::run_as_root("/usr/local/bin/tako-server-service cleanup-upgrade")
 }
 
 pub(super) async fn upgrade_servers(

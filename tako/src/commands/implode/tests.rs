@@ -1,4 +1,4 @@
-use super::server::build_server_implode_script;
+use super::server::build_server_implode_command;
 use super::*;
 use tempfile::TempDir;
 
@@ -43,38 +43,11 @@ fn find_tako_binaries_returns_existing_siblings() {
 }
 
 #[test]
-fn server_implode_script_stops_services() {
-    let script = build_server_implode_script();
-    assert!(script.contains("systemctl stop tako-server"));
-    assert!(script.contains("systemctl disable tako-server"));
-    assert!(script.contains("rc-service tako-server stop"));
-    assert!(script.contains("rc-update del tako-server"));
-}
-
-#[test]
-fn server_implode_script_removes_binaries() {
-    let script = build_server_implode_script();
-    assert!(script.contains("rm -f /usr/local/bin/tako-server"));
-    assert!(script.contains("rm -f /usr/local/bin/tako-server-service"));
-    assert!(script.contains("rm -f /usr/local/bin/tako-server-install-refresh"));
-}
-
-#[test]
-fn server_implode_script_removes_data_and_sockets() {
-    let script = build_server_implode_script();
-    assert!(script.contains("rm -rf /opt/tako"));
-    assert!(script.contains("rm -rf /var/run/tako"));
-}
-
-#[test]
-fn server_implode_script_removes_service_files() {
-    let script = build_server_implode_script();
-    assert!(script.contains("rm -f /etc/systemd/system/tako-server.service"));
-    assert!(script.contains("rm -f /etc/systemd/system/tako-server-standby.service"));
-    assert!(script.contains("rm -rf /etc/systemd/system/tako-server.service.d"));
-    assert!(script.contains("rm -f /etc/init.d/tako-server"));
-    assert!(script.contains("rm -f /etc/init.d/tako-server-standby"));
-    assert!(script.contains("systemctl daemon-reload"));
+fn server_implode_command_uses_approved_helper() {
+    assert_eq!(
+        build_server_implode_command(),
+        crate::ssh::SshClient::run_as_root("/usr/local/bin/tako-server-service implode")
+    );
 }
 
 #[cfg(target_os = "macos")]

@@ -20,38 +20,41 @@ use ws::ChannelWebSocketAuth;
 mod ws;
 
 impl TakoProxy {
-    /// Return the cached `ChannelStore` for `app_name`, opening (and
-    /// registering) it on first use. The store holds a single persistent
-    /// SQLite connection — we share it across requests so the 100ms SSE
-    /// poll loop doesn't reopen the DB + rerun PRAGMAs on every tick.
-    fn channel_store_for_app(&self, app_name: &str) -> Result<Arc<ChannelStore>> {
-        if let Some(existing) = self.channel_stores.read().get(app_name) {
-            return Ok(existing.clone());
-        }
-
-        let mut stores = self.channel_stores.write();
-        if let Some(existing) = stores.get(app_name) {
-            return Ok(existing.clone());
-        }
-
-        let postgres_url = self
-            .channel_postgres_url
-            .read()
-            .as_ref()
-            .and_then(|resolver| resolver(app_name));
-        let config = crate::channels::app_channel_store_config_with_postgres(
-            self.lb.app_manager().data_dir(),
-            app_name,
-            postgres_url.as_deref(),
-        );
-        let store = Arc::new(ChannelStore::open_config(config).map_err(|error| {
-            Error::explain(
-                ErrorType::InternalError,
-                format!("Failed to open channel store for {app_name}: {error}"),
-            )
-        })?);
-        stores.insert(app_name.to_string(), store.clone());
-        Ok(store)
+    /// Cache one store and change poller per app; opening a database may block.
+    async fn channel_store_for_app(&self, app_name: &str) -> Result<Arc<ChannelStore>> {
+        let cell = self
+            .channel_stores
+            .write()
+            .entry(app_name.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::OnceCell::new()))
+            .clone();
+        cell.get_or_try_init(|| async {
+            let resolver = self.channel_postgres_url.read().clone();
+            let data_dir = self.lb.app_manager().data_dir().clone();
+            let app_id = app_name.to_string();
+            let store = Arc::new(
+                tokio::task::spawn_blocking(move || {
+                    let postgres_url = resolver.and_then(|resolver| resolver(&app_id));
+                    let config = crate::channels::app_channel_store_config_with_postgres(
+                        &data_dir,
+                        &app_id,
+                        postgres_url.as_deref(),
+                    );
+                    ChannelStore::open_config(config)
+                })
+                .await
+                .map_err(|error| Error::explain(ErrorType::InternalError, error.to_string()))?
+                .map_err(|error| {
+                    Error::explain(
+                        ErrorType::InternalError,
+                        format!("Failed to open channel store for {app_name}: {error}"),
+                    )
+                })?,
+            );
+            Ok(store)
+        })
+        .await
+        .cloned()
     }
 
     async fn channel_meta_for_app(
@@ -65,6 +68,19 @@ impl TakoProxy {
         }
 
         let defs = fetch_channel_registry(app_name, instance).await?;
+        let store = self
+            .channel_store_for_app(app_name)
+            .await
+            .map_err(|error| ChannelError::Storage(error.to_string()))?;
+        let lifecycle_defs = defs.clone();
+        store
+            .run(move |store| {
+                for definition in lifecycle_defs {
+                    store.sync_channel(&definition.channel, &definition.lifecycle_auth())?;
+                }
+                Ok(())
+            })
+            .await?;
         self.channel_registry.install(app_name, defs);
         self.channel_registry
             .get(app_name, channel)
@@ -129,7 +145,7 @@ impl TakoProxy {
     async fn write_channel_events(
         &self,
         session: &mut Session,
-        store: &ChannelStore,
+        store: &Arc<ChannelStore>,
         channel: &str,
         mut after: Option<i64>,
         auth: &ChannelAuthResponse,
@@ -146,14 +162,25 @@ impl TakoProxy {
         let max_connection_lifetime = Duration::from_millis(auth.max_connection_lifetime_ms.max(1));
         let started_at = tokio::time::Instant::now();
         let mut next_keepalive = started_at + keepalive_interval;
+        let mut changes = store.changes();
+        let mut read_replay = true;
 
         loop {
-            let messages = store.read_after(channel, after, 100).map_err(|error| {
-                Error::explain(
-                    ErrorType::InternalError,
-                    format!("Failed to read channel replay: {error}"),
-                )
-            })?;
+            let messages = if read_replay {
+                changes.borrow_and_update();
+                store
+                    .read_after_async(channel, after, 100)
+                    .await
+                    .map_err(|error| {
+                        Error::explain(
+                            ErrorType::InternalError,
+                            format!("Failed to read channel replay: {error}"),
+                        )
+                    })?
+            } else {
+                Vec::new()
+            };
+            read_replay = messages.len() == 100;
 
             if !messages.is_empty() {
                 for message in messages {
@@ -190,7 +217,13 @@ impl TakoProxy {
                 next_keepalive = now + keepalive_interval;
             }
 
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            if read_replay {
+                continue;
+            }
+            tokio::select! {
+                _ = changes.changed() => read_replay = true,
+                _ = tokio::time::sleep_until(next_keepalive.min(started_at + max_connection_lifetime)) => {}
+            }
         }
     }
 
@@ -330,7 +363,7 @@ impl TakoProxy {
                     return self.write_channel_error(session, error).await;
                 }
             };
-            let store = match self.channel_store_for_app(app_name) {
+            let store = match self.channel_store_for_app(app_name).await {
                 Ok(store) => store,
                 Err(error) => {
                     tracing::error!("channel store unavailable for {app_name}: {error}");
@@ -428,7 +461,7 @@ impl TakoProxy {
         };
         drop(backend);
 
-        let store = match self.channel_store_for_app(app_name) {
+        let store = match self.channel_store_for_app(app_name).await {
             Ok(store) => store,
             Err(error) => {
                 tracing::error!("channel store unavailable for {app_name}: {error}");
@@ -441,7 +474,7 @@ impl TakoProxy {
                     .await;
             }
         };
-        if let Err(error) = store.sync_channel(&route.channel, &auth_result) {
+        if let Err(error) = store.sync_channel_async(&route.channel, &auth_result).await {
             ctx.observation.set_handler_result("error");
             return self.write_channel_error(session, error).await;
         }
@@ -463,14 +496,16 @@ impl TakoProxy {
                 .get("last-event-id")
                 .and_then(|value| value.to_str().ok()),
             "Last-Event-ID",
-        )
-        .and_then(|cursor| store.replay_cursor(&route.channel, cursor))
-        {
+        ) {
             Ok(cursor) => cursor,
             Err(error) => {
                 ctx.observation.set_handler_result("error");
                 return self.write_channel_error(session, error).await;
             }
+        };
+        let cursor = match store.replay_cursor_async(&route.channel, cursor).await {
+            Ok(cursor) => cursor,
+            Err(error) => return self.write_channel_error(session, error).await,
         };
         ctx.observation.set_handler_result("sse");
         self.write_channel_events(session, &store, &route.channel, cursor, &auth_result)

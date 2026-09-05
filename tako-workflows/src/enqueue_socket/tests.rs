@@ -44,19 +44,25 @@ async fn internal_socket_is_group_accessible_for_app_processes() {
 
 #[test]
 fn app_socket_gid_uses_tako_app_group_when_server_runs_as_root() {
-    let gid = app_socket_gid_for_root(|_| Ok(Some((994, 987))), true).unwrap();
+    let gid = app_socket_gid(|_| Ok(Some(987)), true, &[]).unwrap();
     assert_eq!(gid, Some(987));
 }
 
 #[test]
-fn app_socket_gid_is_unchanged_when_server_is_not_root() {
-    let gid = app_socket_gid_for_root(|_| Ok(Some((994, 987))), false).unwrap();
+fn app_socket_gid_uses_service_supplementary_group() {
+    let gid = app_socket_gid(|_| Ok(Some(987)), false, &[987]).unwrap();
+    assert_eq!(gid, Some(987));
+}
+
+#[test]
+fn app_socket_gid_is_unchanged_for_unrelated_local_user() {
+    let gid = app_socket_gid(|_| Ok(Some(987)), false, &[123]).unwrap();
     assert_eq!(gid, None);
 }
 
 #[test]
 fn app_socket_gid_is_unchanged_when_tako_app_is_missing() {
-    let gid = app_socket_gid_for_root(|_| Ok(None), true).unwrap();
+    let gid = app_socket_gid(|_| Ok(None), true, &[]).unwrap();
     assert_eq!(gid, None);
 }
 

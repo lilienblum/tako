@@ -1,11 +1,9 @@
-use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 use std::time::Duration;
 
 use crate::{
     ChannelAuthResponse, ChannelAuthVerifyRequest, ChannelError, ChannelHeaderValue,
-    ChannelOperation, ChannelPublishPayload, INTERNAL_CHANNEL_AUTH_PATH,
-    INTERNAL_CHANNEL_DISPATCH_PATH,
+    ChannelOperation, INTERNAL_CHANNEL_AUTH_PATH,
 };
 
 /// Shared HTTP client for internal app requests. Auth runs on every channel
@@ -84,59 +82,6 @@ pub(crate) fn accept_channel_auth(
         Ok(auth)
     } else {
         Err(ChannelError::Forbidden)
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ChannelDispatchRequest {
-    pub channel: String,
-    pub frame: ChannelPublishPayload,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub subject: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "action", rename_all = "lowercase")]
-pub enum ChannelDispatchResponse {
-    Fanout {
-        data: serde_json::Value,
-    },
-    Drop {
-        #[serde(default)]
-        error: Option<String>,
-    },
-    Reject {
-        reason: String,
-    },
-}
-
-/// Dispatch a client-initiated WS frame through the app's declared
-/// per-channel handler. Returns the action to take: fanout the returned
-/// data, drop the message, or reject (reason-coded) the connection.
-pub async fn dispatch_channel_message(
-    endpoint: &str,
-    internal_host: &str,
-    internal_token_header: &str,
-    internal_token: &str,
-    request: ChannelDispatchRequest,
-) -> Result<ChannelDispatchResponse, ChannelError> {
-    let response = shared_client()?
-        .post(format!("http://{endpoint}{INTERNAL_CHANNEL_DISPATCH_PATH}"))
-        .header("Host", internal_host)
-        .header(internal_token_header, internal_token)
-        .json(&request)
-        .send()
-        .await
-        .map_err(|_| ChannelError::AuthUnavailable)?;
-
-    match response.status().as_u16() {
-        200 => response
-            .json::<ChannelDispatchResponse>()
-            .await
-            .map_err(|e| ChannelError::BadRequest(format!("invalid dispatch response: {e}"))),
-        403 => Err(ChannelError::Forbidden),
-        404 => Err(ChannelError::NotDefined),
-        _ => Err(ChannelError::AuthUnavailable),
     }
 }
 

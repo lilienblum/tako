@@ -832,9 +832,11 @@ async fn wake_on_request_spawns_exactly_one_process() {
     let spawn_dir = tmp.path().join("spawns");
     std::fs::create_dir_all(&spawn_dir).unwrap();
 
-    // The command touches a file named after its own PID, then sleeps.
-    // Each distinct spawn produces a distinct file.
-    let cmd_str = format!("touch {}/$$; sleep 60", spawn_dir.display());
+    // Each spawn records its PID and completes the current fd-4 readiness ABI.
+    let cmd_str = format!(
+        "touch {}/$$; printf '12345\\n' >&4; exec sleep 60",
+        spawn_dir.display()
+    );
     let config_path = format!("{}/tako.toml", tmp.path().display());
 
     {
@@ -879,10 +881,14 @@ async fn wake_on_request_spawns_exactly_one_process() {
         })
         .collect();
 
-    // Give the tasks time to acquire the lock and make their decision.
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    let completed = tokio::time::timeout(Duration::from_secs(5), async {
+        for handle in handles {
+            handle.await.expect("wake task panicked");
+        }
+    })
+    .await;
 
-    // Kill the single spawned process so the readiness wait unblocks.
+    // Clean up even when readiness fails so the test never leaves a child behind.
     let pid = state
         .lock()
         .unwrap()
@@ -893,9 +899,7 @@ async fn wake_on_request_spawns_exactly_one_process() {
         kill_app_process(pid);
     }
 
-    for h in handles {
-        let _ = tokio::time::timeout(Duration::from_secs(2), h).await;
-    }
+    completed.expect("wake tasks did not finish readiness");
 
     // Exactly one marker file means exactly one spawn.
     let spawn_count = std::fs::read_dir(&spawn_dir).unwrap().count();

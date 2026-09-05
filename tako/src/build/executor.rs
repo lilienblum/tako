@@ -1,19 +1,13 @@
-//! Build executor - runs build commands and creates archives
+//! Build source hashes and deployment versions.
 
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use thiserror::Error;
 
 /// Errors that can occur during build
 #[derive(Debug, Error)]
 pub enum BuildError {
-    #[error("Build command failed: {0}")]
-    CommandFailed(String),
-
-    #[error("Build command not found: {0}")]
-    CommandNotFound(String),
-
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
@@ -22,19 +16,6 @@ pub enum BuildError {
 
     #[error("Git error: {0}")]
     GitError(String),
-}
-
-/// Result of running a build command
-#[derive(Debug)]
-pub struct BuildResult {
-    /// Whether the build succeeded
-    pub success: bool,
-    /// Combined stdout output
-    pub stdout: String,
-    /// Combined stderr output
-    pub stderr: String,
-    /// Exit code
-    pub exit_code: Option<i32>,
 }
 
 /// Build executor
@@ -46,28 +27,6 @@ pub struct BuildExecutor {
 impl BuildExecutor {
     pub fn new(cwd: impl Into<PathBuf>) -> Self {
         Self { cwd: cwd.into() }
-    }
-
-    /// Run a build command
-    pub fn run_build(&self, command: &str) -> Result<BuildResult, BuildError> {
-        if command.trim().is_empty() {
-            return Err(BuildError::CommandFailed("Empty command".to_string()));
-        }
-
-        let output = Command::new("sh")
-            .args(["-c", command])
-            .current_dir(&self.cwd)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .map_err(BuildError::Io)?;
-
-        Ok(BuildResult {
-            success: output.status.success(),
-            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            exit_code: output.status.code(),
-        })
     }
 
     /// Get the current git commit hash (short form)
@@ -146,138 +105,7 @@ impl BuildExecutor {
         self.is_git_dirty()
     }
 
-    /// Create a deployment archive (.tar.zst)
-    pub fn create_archive(
-        &self,
-        source_dir: &Path,
-        output_path: &Path,
-        exclude_patterns: &[&str],
-    ) -> Result<u64, BuildError> {
-        self.create_archive_with_extra_files(source_dir, output_path, exclude_patterns, &[])
-    }
-
-    /// Create a deployment archive (.tar.zst) with additional virtual files.
-    pub fn create_archive_with_extra_files(
-        &self,
-        source_dir: &Path,
-        output_path: &Path,
-        exclude_patterns: &[&str],
-        extra_files: &[(&str, &[u8])],
-    ) -> Result<u64, BuildError> {
-        use tar::Header;
-
-        // Create parent directory if needed
-        if let Some(parent) = output_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
-        let file = std::fs::File::create(output_path)?;
-        let encoder = zstd::stream::write::Encoder::new(file, 3).map_err(|e| {
-            BuildError::ArchiveError(format!("Failed to initialize zstd encoder: {}", e))
-        })?;
-        let mut archive = tar::Builder::new(encoder);
-        archive.follow_symlinks(false);
-
-        // Default exclusions
-        let default_excludes = [
-            ".git",
-            "node_modules",
-            ".tako",
-            "target",
-            ".env",
-            ".env.local",
-            "*.log",
-        ];
-
-        // Walk directory and add files
-        self.add_dir_to_archive(
-            &mut archive,
-            source_dir,
-            source_dir,
-            &default_excludes,
-            exclude_patterns,
-        )?;
-
-        for (path, bytes) in extra_files {
-            let mut header = Header::new_gnu();
-            header.set_size(bytes.len() as u64);
-            header.set_mode(0o644);
-            header.set_cksum();
-            archive.append_data(&mut header, path, &mut std::io::Cursor::new(*bytes))?;
-        }
-
-        let encoder = archive
-            .into_inner()
-            .map_err(|e| BuildError::ArchiveError(format!("Failed to finish archive: {}", e)))?;
-
-        encoder
-            .finish()
-            .map_err(|e| BuildError::ArchiveError(format!("Failed to compress: {}", e)))?;
-
-        // Return file size
-        let metadata = std::fs::metadata(output_path)?;
-        Ok(metadata.len())
-    }
-
-    /// Create a source deployment archive (.tar.zst).
-    ///
-    /// File selection rules:
-    /// - Base ignore semantics from `.gitignore`
-    /// - Non-overridable excludes for safety/perf: `.git/`, `.tako/`, `.env*`, `node_modules/`, `target/`
-    pub fn create_source_archive_with_extra_files(
-        &self,
-        source_root: &Path,
-        output_path: &Path,
-        extra_files: &[(&str, &[u8])],
-    ) -> Result<u64, BuildError> {
-        use tar::Header;
-
-        if let Some(parent) = output_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
-        let file = std::fs::File::create(output_path)?;
-        let encoder = zstd::stream::write::Encoder::new(file, 3).map_err(|e| {
-            BuildError::ArchiveError(format!("Failed to initialize zstd encoder: {}", e))
-        })?;
-        let mut archive = tar::Builder::new(encoder);
-        archive.follow_symlinks(false);
-
-        let files = collect_source_archive_files(source_root)?;
-
-        for (full_path, relative_path) in files {
-            archive
-                .append_path_with_name(&full_path, &relative_path)
-                .map_err(|e| {
-                    BuildError::ArchiveError(format!(
-                        "Failed to add {}: {}",
-                        full_path.display(),
-                        e
-                    ))
-                })?;
-        }
-
-        for (path, bytes) in extra_files {
-            let mut header = Header::new_gnu();
-            header.set_size(bytes.len() as u64);
-            header.set_mode(0o644);
-            header.set_cksum();
-            archive.append_data(&mut header, path, &mut std::io::Cursor::new(*bytes))?;
-        }
-
-        let encoder = archive
-            .into_inner()
-            .map_err(|e| BuildError::ArchiveError(format!("Failed to finish archive: {}", e)))?;
-
-        encoder
-            .finish()
-            .map_err(|e| BuildError::ArchiveError(format!("Failed to compress: {}", e)))?;
-
-        let metadata = std::fs::metadata(output_path)?;
-        Ok(metadata.len())
-    }
-
-    /// Compute SHA256 hash over filtered source payload (same file selection as source archive).
+    /// Compute SHA256 over source paths and contents, respecting gitignore and forced exclusions.
     pub fn compute_source_hash(&self, source_root: &Path) -> Result<String, BuildError> {
         use sha2::{Digest, Sha256};
 
@@ -288,8 +116,7 @@ impl BuildExecutor {
             hasher.update(relative_path.to_string_lossy().as_bytes());
             let metadata = std::fs::symlink_metadata(&full_path)?;
             if metadata.file_type().is_symlink() {
-                // Source archives preserve symlinks; hash the link target so the source hash
-                // tracks symlink changes without following directory links.
+                // Hash the link target without following directory links.
                 let target = std::fs::read_link(&full_path)?;
                 hasher.update(b"symlink:");
                 hasher.update(target.to_string_lossy().as_bytes());
@@ -309,64 +136,8 @@ impl BuildExecutor {
         Ok(hex::encode(hasher.finalize()))
     }
 
-    fn add_dir_to_archive<W: Write>(
-        &self,
-        archive: &mut tar::Builder<W>,
-        base_dir: &Path,
-        current_dir: &Path,
-        default_excludes: &[&str],
-        custom_excludes: &[&str],
-    ) -> Result<(), BuildError> {
-        let entries = std::fs::read_dir(current_dir)?;
-
-        for entry in entries {
-            let entry = entry?;
-            let path = entry.path();
-            let file_type = entry.file_type()?;
-            let file_name = path.file_name().unwrap().to_string_lossy();
-
-            // Check exclusions
-            let should_exclude = default_excludes.iter().any(|p| {
-                if let Some(suffix) = p.strip_prefix('*') {
-                    file_name.ends_with(suffix)
-                } else {
-                    file_name == *p
-                }
-            }) || custom_excludes.iter().any(|p| {
-                if let Some(suffix) = p.strip_prefix('*') {
-                    file_name.ends_with(suffix)
-                } else {
-                    file_name == *p
-                }
-            });
-
-            if should_exclude {
-                continue;
-            }
-
-            let relative_path = path.strip_prefix(base_dir).unwrap();
-
-            if file_type.is_dir() {
-                self.add_dir_to_archive(
-                    archive,
-                    base_dir,
-                    &path,
-                    default_excludes,
-                    custom_excludes,
-                )?;
-            } else if file_type.is_file() || file_type.is_symlink() {
-                archive
-                    .append_path_with_name(&path, relative_path)
-                    .map_err(|e| {
-                        BuildError::ArchiveError(format!("Failed to add {}: {}", path.display(), e))
-                    })?;
-            }
-        }
-
-        Ok(())
-    }
-
     /// Extract an archive to a directory
+    #[cfg(test)]
     pub fn extract_archive(archive_path: &Path, dest_dir: &Path) -> Result<(), BuildError> {
         std::fs::create_dir_all(dest_dir)?;
 
@@ -398,46 +169,6 @@ pub fn compute_file_hash(path: &Path) -> Result<String, BuildError> {
             break;
         }
         hasher.update(&buffer[..bytes_read]);
-    }
-
-    let result = hasher.finalize();
-    Ok(hex::encode(result))
-}
-
-/// Compute SHA256 hash of directory contents (for dirty detection)
-pub fn compute_dir_hash(dir: &Path, exclude_patterns: &[&str]) -> Result<String, BuildError> {
-    use sha2::{Digest, Sha256};
-
-    let mut hasher = Sha256::new();
-    let mut paths: Vec<PathBuf> = Vec::new();
-
-    // Collect all file paths
-    collect_files(dir, &mut paths, exclude_patterns)?;
-
-    // Sort for deterministic ordering
-    paths.sort();
-
-    // Hash each file's path and content
-    for path in paths {
-        let relative = path.strip_prefix(dir).unwrap();
-        hasher.update(relative.to_string_lossy().as_bytes());
-
-        let metadata = std::fs::symlink_metadata(&path)?;
-        if metadata.file_type().is_symlink() {
-            let target = std::fs::read_link(&path)?;
-            hasher.update(b"symlink:");
-            hasher.update(target.to_string_lossy().as_bytes());
-        } else {
-            let mut file = std::fs::File::open(&path)?;
-            let mut buffer = [0u8; 8192];
-            loop {
-                let bytes_read = file.read(&mut buffer)?;
-                if bytes_read == 0 {
-                    break;
-                }
-                hasher.update(&buffer[..bytes_read]);
-            }
-        }
     }
 
     let result = hasher.finalize();
@@ -502,43 +233,6 @@ fn collect_source_archive_files(source_root: &Path) -> Result<Vec<(PathBuf, Path
 
     files.sort_by(|a, b| a.1.cmp(&b.1));
     Ok(files)
-}
-
-fn collect_files(
-    dir: &Path,
-    paths: &mut Vec<PathBuf>,
-    exclude_patterns: &[&str],
-) -> Result<(), BuildError> {
-    let default_excludes = [".git", "node_modules", ".tako", "target"];
-
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        let file_type = entry.file_type()?;
-        let file_name = path.file_name().unwrap().to_string_lossy();
-
-        // Check exclusions
-        let should_exclude = default_excludes.iter().any(|p| file_name == *p)
-            || exclude_patterns.iter().any(|p| {
-                if let Some(suffix) = p.strip_prefix('*') {
-                    file_name.ends_with(suffix)
-                } else {
-                    file_name == *p
-                }
-            });
-
-        if should_exclude {
-            continue;
-        }
-
-        if file_type.is_dir() {
-            collect_files(&path, paths, exclude_patterns)?;
-        } else if file_type.is_file() || file_type.is_symlink() {
-            paths.push(path);
-        }
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]

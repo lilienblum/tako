@@ -176,6 +176,8 @@ Tako keeps no workflow worker running while the queue has no runnable work. Enqu
 
 Production starts one scale-to-zero lane per worker group. Workflows with `worker: "email"` run in a process that only claims that group. The config parser also accepts worker counts, concurrency, and per-server overrides; those values are not applied yet.
 
+JavaScript and Go workers honor the runtime-provided lane concurrency (currently 500). Go workers stop claiming on cancellation and wait for active handlers to finish, continuing their lease heartbeats while draining. Concurrency is a worker setting; `defineWorkflow` does not expose per-workflow concurrency or handler timeouts.
+
 The workflow process runs separately from HTTP instances. Heavy workflow dependencies do not have to occupy every request-serving process, while the worker still receives the app's runtime variables, secrets, storage bindings, and structured logs.
 
 If a worker exits with an error before it can claim any work, Tako stops the immediate respawn loop and makes the next enqueue fail with the startup error. Fixing the worker lets the next successful claim restore normal operation.

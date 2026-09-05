@@ -496,38 +496,198 @@ configure_public_ports() {
 }
 
 install_upgrade_helpers() {
+  mkdir -p /etc/tako
+  # The privileged helper reads only this root-owned configuration.
+  case "$TAKO_HOME:$TAKO_USER" in
+    *[!a-zA-Z0-9_./:-]*) echo "error: unsupported isolation path or user" >&2; exit 1 ;;
+  esac
+  printf '%s\n%s\n' "$TAKO_HOME" "$TAKO_USER" > /etc/tako/isolation.conf
+  chown root:root /etc/tako /etc/tako/isolation.conf
+  chmod 0755 /etc/tako
+  chmod 0644 /etc/tako/isolation.conf
+  cat > /usr/local/bin/tako-provision-app <<'EOF'
+#!/bin/sh
+set -eu
+exec /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/local/bin/tako-server --provision-app "$@"
+EOF
+  chown root:root /usr/local/bin/tako-provision-app
+  chmod 0755 /usr/local/bin/tako-provision-app
+  helper_dir=/usr/local/libexec/tako
+  mkdir -p "$helper_dir"
+  chown root:root "$helper_dir"
+  chmod 0755 "$helper_dir"
+  case "$TAKO_SOCKET" in
+    *[!a-zA-Z0-9_./:-]*) echo "error: unsupported socket path" >&2; exit 1 ;;
+  esac
+  printf '%s\n%s\n%s\n' "$TAKO_USER" "$TAKO_HOME" "$TAKO_SOCKET" > "$helper_dir/install-settings"
+  chown root:root "$helper_dir/install-settings"
+  chmod 0644 "$helper_dir/install-settings"
   cat > "$TAKO_SERVER_INSTALL_REFRESH_HELPER" <<'EOF'
 #!/bin/sh
 set -eu
+exec /usr/bin/env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /bin/sh /usr/local/libexec/tako/refresh "$@"
+EOF
+  cat > "$helper_dir/refresh" <<'EOF'
+#!/bin/sh
+set -eu
+[ "$#" -eq 2 ] || { echo "error: refresh requires an archive name and SHA-256" >&2; exit 1; }
+archive_name="$1"
+expected_sha="$2"
+case "$archive_name" in
+  tako-server-linux-x86_64-glibc.tar.zst|tako-server-linux-x86_64-musl.tar.zst|tako-server-linux-aarch64-glibc.tar.zst|tako-server-linux-aarch64-musl.tar.zst) ;;
+  *) echo "error: unsupported release archive" >&2; exit 1 ;;
+esac
+case "$expected_sha" in
+  ''|*[!a-fA-F0-9]*) echo "error: invalid release SHA-256" >&2; exit 1 ;;
+esac
+[ "${#expected_sha}" -eq 64 ] || { echo "error: invalid release SHA-256" >&2; exit 1; }
+
+{
+  IFS= read -r TAKO_USER
+  IFS= read -r TAKO_HOME
+  IFS= read -r TAKO_SOCKET
+} < /usr/local/libexec/tako/install-settings
+export TAKO_USER TAKO_HOME TAKO_SOCKET
 
 installer_url="https://tako.sh/install-server.sh"
-installer="$(mktemp)"
-trap 'rm -f "$installer"' EXIT
+temporary_dir="$(mktemp -d)"
+installer="$temporary_dir/install-server.sh"
+archive="$temporary_dir/$archive_name"
+trap 'rm -rf "$temporary_dir"' EXIT
 
-if command -v curl >/dev/null 2>&1; then
-  curl -fsSL "$installer_url" -o "$installer"
-elif command -v wget >/dev/null 2>&1; then
-  wget -qO "$installer" "$installer_url"
+download() {
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$1" -o "$2"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "$2" "$1"
+  else
+    echo "error: missing required downloader (curl or wget)" >&2
+    exit 1
+  fi
+}
+download "$installer_url" "$installer"
+download "https://github.com/tako-sh/tako/releases/download/latest/$archive_name" "$archive"
+if command -v sha256sum >/dev/null 2>&1; then
+  actual_sha="$(sha256sum "$archive" | awk '{print $1}')"
 else
-  echo "error: missing required downloader (curl or wget)" >&2
+  actual_sha="$(shasum -a 256 "$archive" | awk '{print $1}')"
+fi
+expected_sha="$(printf '%s' "$expected_sha" | tr 'A-F' 'a-f')"
+[ "$actual_sha" = "$expected_sha" ] || { echo "error: release SHA-256 mismatch" >&2; exit 1; }
+printf '%s\n' "$expected_sha" > "$archive.sha256"
+
+install -m 0755 /usr/local/bin/tako-server /usr/local/bin/tako-server.prev
+if ! TAKO_SERVER_URL="file://$archive" TAKO_ALLOW_INSECURE_DOWNLOAD_BASE=1 TAKO_RESTART_SERVICE=0 sh "$installer" </dev/null; then
+  /usr/local/bin/tako-server-service rollback
   exit 1
 fi
-
-TAKO_RESTART_SERVICE=0 sh "$installer"
 EOF
   chmod 0755 "$TAKO_SERVER_INSTALL_REFRESH_HELPER"
 
   cat > "$TAKO_SERVER_SERVICE_HELPER" <<'EOF'
 #!/bin/sh
 set -eu
+exec /usr/bin/env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /bin/sh /usr/local/libexec/tako/service "$@"
+EOF
+  cat > "$helper_dir/service" <<'EOF'
+#!/bin/sh
+set -eu
 
 action="${1:-}"
 case "$action" in
-  reload|restart)
+  reload|restart|rollback|cleanup-upgrade|implode)
+    [ "$#" -eq 1 ] || { echo "error: expected one maintenance action" >&2; exit 1; }
+    ;;
+  configure)
+    [ "$#" -eq 3 ] || { echo "error: configure requires HTTP and HTTPS ports" >&2; exit 1; }
+    for port in "$2" "$3"; do
+      case "$port" in
+        ''|*[!0-9]*) echo "error: ports must be between 1 and 65535" >&2; exit 1 ;;
+      esac
+      [ "${#port}" -le 5 ] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || {
+        echo "error: ports must be between 1 and 65535" >&2; exit 1;
+      }
+    done
+    [ "$2" -ne "$3" ] || { echo "error: HTTP and HTTPS ports must differ" >&2; exit 1; }
     ;;
   *)
-    echo "error: expected action 'reload' or 'restart'" >&2
+    echo "error: unsupported maintenance action" >&2
     exit 1
+    ;;
+esac
+
+case "$action" in
+  rollback)
+    [ -f /usr/local/bin/tako-server.prev ] || { echo "error: previous tako-server binary not found" >&2; exit 1; }
+    install -m 0755 /usr/local/bin/tako-server.prev /usr/local/bin/tako-server
+    if command -v setcap >/dev/null 2>&1; then
+      setcap cap_net_bind_service,cap_setuid,cap_setgid,cap_kill=+ep /usr/local/bin/tako-server
+    fi
+    exit 0
+    ;;
+  cleanup-upgrade)
+    rm -f /usr/local/bin/tako-server.prev
+    exit 0
+    ;;
+  configure)
+    for service_file in /etc/systemd/system/tako-server.service /etc/systemd/system/tako-server-standby.service /etc/init.d/tako-server; do
+      [ -f "$service_file" ] || continue
+      # Bootstrap may run before Tailscale connects. Configure the primary's
+      # private management listener when recovery starts that installation.
+      if [ "$service_file" != /etc/systemd/system/tako-server-standby.service ] && ! grep -q -- '--management-host ' "$service_file"; then
+        management_host="$(tailscale ip -4 2>/dev/null | awk -F. '
+          NF == 4 {
+            valid = 1
+            for (i = 1; i <= 4; i++) {
+              if ($i !~ /^[0-9]+$/ || $i < 0 || $i > 255) valid = 0
+            }
+            if (valid && $1 == 100 && $2 >= 64 && $2 <= 127) { print; exit }
+          }
+        ')"
+        [ -n "$management_host" ] || { echo "error: connect this server to Tailscale before starting tako-server" >&2; exit 1; }
+        sed -i "s/--https-port [0-9][0-9]*/& --management-host $management_host/" "$service_file"
+      fi
+      sed -i "s/--http-port [0-9][0-9]*/--http-port $2/g; s/--https-port [0-9][0-9]*/--https-port $3/g" "$service_file"
+    done
+    if command -v systemctl >/dev/null 2>&1; then systemctl daemon-reload; fi
+    action=restart
+    ;;
+  implode)
+    {
+      IFS= read -r tako_user
+      IFS= read -r tako_home
+      IFS= read -r tako_socket
+    } < /usr/local/libexec/tako/install-settings
+    # Refuse broad directories, including an administrator's invalid install setting.
+    case "$tako_home" in
+      /opt/?*|/srv/?*|/var/lib/?*) ;;
+      *) echo "error: remove this custom data directory as administrator" >&2; exit 1 ;;
+    esac
+    case "$tako_socket" in
+      /run/?*/?*|/var/run/?*/?*) ;;
+      *) echo "error: remove this custom socket directory as administrator" >&2; exit 1 ;;
+    esac
+    case "$tako_home:$tako_socket" in
+      *..*) echo "error: invalid install paths" >&2; exit 1 ;;
+    esac
+    if command -v systemctl >/dev/null 2>&1; then
+      systemctl stop tako-server tako-server-standby
+      systemctl disable tako-server tako-server-standby 2>/dev/null || true
+    elif command -v rc-service >/dev/null 2>&1; then
+      rc-service tako-server stop
+      rc-update del tako-server 2>/dev/null || true
+    fi
+    rm -f /etc/systemd/system/tako-server.service /etc/systemd/system/tako-server-standby.service
+    rm -rf /etc/systemd/system/tako-server.service.d
+    rm -f /etc/init.d/tako-server /etc/init.d/tako-server-standby
+    if command -v systemctl >/dev/null 2>&1; then systemctl daemon-reload; fi
+    rm -rf -- "$tako_home"
+    rm -f -- "$tako_socket"
+    rmdir -- "$(dirname "$tako_socket")" 2>/dev/null || true
+    rm -f /usr/local/bin/tako-server /usr/local/bin/tako-server.prev /usr/local/bin/tako-provision-app /usr/local/bin/tako-server-service /usr/local/bin/tako-server-install-refresh
+    rm -f /etc/sudoers.d/tako /etc/tako/isolation.conf
+    rm -rf /usr/local/libexec/tako
+    exit 0
     ;;
 esac
 
@@ -541,14 +701,13 @@ else
 fi
 EOF
   chmod 0755 "$TAKO_SERVER_SERVICE_HELPER"
+  chown root:root "$TAKO_SERVER_SERVICE_HELPER" "$TAKO_SERVER_INSTALL_REFRESH_HELPER" "$helper_dir/refresh" "$helper_dir/service"
+  chmod 0644 "$helper_dir/refresh" "$helper_dir/service"
 
   cat > /etc/sudoers.d/tako <<EOF
 # Managed by Tako install-server.
-# The tako user is a no-login service account (only accessible via SSH key).
-# It needs root for upgrades (binary install + service reload) and server
-# administration tasks (DNS setup, systemd drop-ins). Commands are invoked
-# via sudo sh -c '...' so the rule must not be restricted to specific binaries.
-$TAKO_USER ALL=(root) NOPASSWD: ALL
+# Fixed root-owned helpers validate their arguments; no arbitrary root shell.
+$TAKO_USER ALL=(root) NOPASSWD: /usr/local/bin/tako-provision-app *, $TAKO_SERVER_INSTALL_REFRESH_HELPER *, $TAKO_SERVER_SERVICE_HELPER reload, $TAKO_SERVER_SERVICE_HELPER restart, $TAKO_SERVER_SERVICE_HELPER configure *, $TAKO_SERVER_SERVICE_HELPER rollback, $TAKO_SERVER_SERVICE_HELPER cleanup-upgrade, $TAKO_SERVER_SERVICE_HELPER implode
 EOF
   chmod 0440 /etc/sudoers.d/tako
 
@@ -1168,24 +1327,23 @@ if ! id -u "$TAKO_USER" >/dev/null 2>&1; then
   fi
 fi
 
-# Create `tako-app` user for app and worker processes.
-if ! id -u "tako-app" >/dev/null 2>&1; then
-  if need_cmd useradd; then
-    useradd --system --no-create-home --shell /usr/sbin/nologin --gid "$TAKO_USER" "tako-app" 2>/dev/null || \
-      useradd --system --no-create-home --shell /sbin/nologin --gid "$TAKO_USER" "tako-app"
-  elif need_cmd adduser; then
-    adduser -S -D -H -s /sbin/nologin -G "$TAKO_USER" "tako-app"
-  fi
+# Shadow's account tools are also used by the narrow provisioning helper.
+if ! need_cmd useradd || ! need_cmd groupadd; then
+  install_pkgs shadow
+fi
+getent group tako-app >/dev/null 2>&1 || groupadd --system tako-app
+usermod -a -G tako-app "$TAKO_USER"
+if ! id -u tako-images >/dev/null 2>&1; then
+  useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin tako-images
 fi
 
 install_upgrade_helpers
 
 socket_dir="$(dirname "$TAKO_SOCKET")"
 mkdir -p "$TAKO_HOME" "$socket_dir"
-chown "$TAKO_USER":"$TAKO_USER" "$TAKO_HOME" "$socket_dir" 2>/dev/null || true
-# 0o710: owner (tako) full; group (tako, contains tako-app) traverse-only so
-# sandboxed app processes can descend into runtimes/ and releases/ to exec
-# binaries; world none. Must not be 0o700 — that returns ENOENT on execve.
+chown "$TAKO_USER":tako-app "$TAKO_HOME"
+chown "$TAKO_USER":"$TAKO_USER" "$socket_dir"
+# App identities share traverse permission, but each app subtree has its own group.
 chmod 0710 "$TAKO_HOME"
 chmod 0700 "$socket_dir"
 echo "OK prepared data and socket directories"
@@ -1365,9 +1523,11 @@ Type=notify
 NotifyAccess=all
 User=$TAKO_USER
 Group=$TAKO_USER
-NoNewPrivileges=true
+# sudo is restricted to the root-owned provisioning and maintenance helpers.
+NoNewPrivileges=false
+SupplementaryGroups=tako-app
 AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_SETUID CAP_SETGID CAP_KILL
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_SETUID CAP_SETGID CAP_KILL
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_SETUID CAP_SETGID CAP_KILL CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart=/usr/local/bin/tako-server --socket $TAKO_SOCKET --data-dir $TAKO_HOME $TAKO_PUBLIC_PORT_ARGS $TAKO_MANAGEMENT_ARGS
 ExecReload=/bin/kill -HUP \$MAINPID
@@ -1430,9 +1590,10 @@ Type=notify
 NotifyAccess=all
 User=$TAKO_USER
 Group=$TAKO_USER
-NoNewPrivileges=true
+NoNewPrivileges=false
+SupplementaryGroups=tako-app
 AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_SETUID CAP_SETGID CAP_KILL
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_SETUID CAP_SETGID CAP_KILL
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_SETUID CAP_SETGID CAP_KILL CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart=/usr/local/bin/tako-server --standby --socket $TAKO_SOCKET --data-dir $TAKO_HOME $TAKO_PUBLIC_PORT_ARGS --instance-port-offset 1000
 Restart=always
@@ -1460,17 +1621,10 @@ if [ "$SERVICE_MANAGER" = "systemd" ]; then
   if is_enabled "$TAKO_RESTART_SERVICE"; then
     systemctl enable tako-server >/dev/null 2>&1 || true
     if systemctl is-active --quiet tako-server; then
-      main_pid="$(systemd_main_pid)"
-      if { [ -n "$TAKO_MANAGEMENT_ARGS" ] && ! process_has_management_host "$main_pid" "$TAKO_MANAGEMENT_HOST"; } || ! process_has_public_ports "$main_pid" "$TAKO_HTTP_PORT" "$TAKO_HTTPS_PORT"; then
-        echo "Restarting tako-server service"
-        systemctl restart tako-server
-        echo "OK tako-server restarted with updated service settings"
-      else
-        # Service already running — graceful reload (SIGHUP) to pick up new binary.
-        echo "Reloading tako-server service"
-        systemctl reload tako-server
-        echo "OK tako-server reloaded (SIGHUP)"
-      fi
+      # Restart also replaces children started under the previous security policy.
+      echo "Restarting tako-server service"
+      systemctl restart tako-server
+      echo "OK tako-server restarted with updated service settings"
     else
       echo "Starting tako-server service"
       systemctl start tako-server
@@ -1488,15 +1642,9 @@ elif [ "$SERVICE_MANAGER" = "openrc" ]; then
   if is_enabled "$TAKO_RESTART_SERVICE"; then
     rc-update add tako-server default >/dev/null 2>&1 || true
     if rc-service tako-server status >/dev/null 2>&1; then
-      main_pid="$(openrc_main_pid)"
-      if { [ -n "$TAKO_MANAGEMENT_ARGS" ] && ! process_has_management_host "$main_pid" "$TAKO_MANAGEMENT_HOST"; } || ! process_has_public_ports "$main_pid" "$TAKO_HTTP_PORT" "$TAKO_HTTPS_PORT"; then
-        echo "Restarting tako-server service"
-        rc-service tako-server restart
-        echo "OK tako-server restarted with updated service settings"
-      else
-        echo "Reloading tako-server service"
-        rc-service tako-server reload || rc-service tako-server restart
-      fi
+      echo "Restarting tako-server service"
+      rc-service tako-server restart
+      echo "OK tako-server restarted with updated service settings"
     else
       echo "Starting tako-server service"
       rc-service tako-server start

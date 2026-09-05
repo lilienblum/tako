@@ -13,8 +13,6 @@ use tako_channels::{
     ChannelAuthResponse, ChannelPublishPayload, ChannelStore, parse_channel_route,
 };
 
-const POLL_INTERVAL: Duration = Duration::from_millis(100);
-
 /// Default auth response for dev mode — permissive, no subject, SSE transport.
 fn dev_auth_response() -> ChannelAuthResponse {
     ChannelAuthResponse {
@@ -69,9 +67,21 @@ impl DevChannelStore {
         app_id: &str,
         channel: &str,
         payload: &ChannelPublishPayload,
+        lifecycle: Option<tako_channels::ChannelLifecycle>,
     ) -> Result<tako_channels::ChannelMessage, tako_channels::ChannelError> {
         let store = self.store_for_app(app_id);
-        store.sync_channel(channel, &dev_auth_response())?;
+        if let Some(lifecycle) = lifecycle {
+            store.sync_channel(
+                channel,
+                &ChannelAuthResponse {
+                    replay_window_ms: lifecycle.replay_window_ms,
+                    inactivity_ttl_ms: lifecycle.inactivity_ttl_ms,
+                    keepalive_interval_ms: lifecycle.keepalive_interval_ms,
+                    max_connection_lifetime_ms: lifecycle.max_connection_lifetime_ms,
+                    ..dev_auth_response()
+                },
+            )?;
+        }
         store.append(channel, payload)
     }
 }
@@ -103,18 +113,18 @@ async fn serve_sse(
     app_id: &str,
     channel: &str,
 ) -> Result<bool> {
-    let store = dev_store.store_for_app(app_id);
+    let dev_store = dev_store.clone();
+    let app_id = app_id.to_owned();
+    let store = tokio::task::spawn_blocking(move || dev_store.store_for_app(&app_id))
+        .await
+        .map_err(|error| {
+            pingora_core::Error::explain(pingora_core::ErrorType::InternalError, error.to_string())
+        })?;
     let auth = dev_auth_response();
-
-    // Sync channel metadata (creates the channel if needed, prunes stale data).
-    if let Err(e) = store.sync_channel(channel, &auth) {
-        let msg = format!(r#"{{"error":"Channel sync failed: {e}"}}"#);
-        return write_json(session, 500, &msg).await;
-    }
 
     // Resolve the initial cursor — start from the latest message so new
     // subscribers only see future events (matching production behavior).
-    let mut after = match store.replay_cursor(channel, None) {
+    let mut after = match store.replay_cursor_async(channel, None).await {
         Ok(cursor) => cursor,
         Err(e) => {
             let msg = format!(r#"{{"error":"Failed to resolve cursor: {e}"}}"#);
@@ -136,33 +146,42 @@ async fn serve_sse(
 
     let started = tokio::time::Instant::now();
     let mut next_keepalive = started + keepalive_interval;
+    let mut changes = store.changes();
+    let mut read_replay = true;
 
     loop {
-        match store.read_after(channel, after, 100) {
-            Ok(messages) => {
-                if !messages.is_empty() {
-                    for message in messages {
-                        let encoded = serde_json::to_string(&message).unwrap_or_default();
-                        let frame = format!("id: {}\ndata: {}\n\n", message.id, encoded);
-                        if session
-                            .write_response_body(Some(frame.into_bytes().into()), false)
-                            .await
-                            .is_err()
-                        {
-                            return Ok(true);
+        if read_replay {
+            changes.borrow_and_update();
+            match store.read_after_async(channel, after, 100).await {
+                Ok(messages) => {
+                    read_replay = messages.len() == 100;
+                    if !messages.is_empty() {
+                        for message in messages {
+                            let encoded = serde_json::to_string(&message).unwrap_or_default();
+                            let frame = format!("id: {}\ndata: {}\n\n", message.id, encoded);
+                            if session
+                                .write_response_body(Some(frame.into_bytes().into()), false)
+                                .await
+                                .is_err()
+                            {
+                                return Ok(true);
+                            }
+                            after = Some(
+                                message
+                                    .id
+                                    .parse::<i64>()
+                                    .expect("channel ids are always numeric"),
+                            );
                         }
-                        after = Some(
-                            message
-                                .id
-                                .parse::<i64>()
-                                .expect("channel ids are always numeric"),
-                        );
+                        next_keepalive = tokio::time::Instant::now() + keepalive_interval;
                     }
-                    next_keepalive = tokio::time::Instant::now() + keepalive_interval;
                 }
-            }
-            Err(_) => {
-                // Transient read error — skip this poll cycle.
+                Err(error) => {
+                    return Err(pingora_core::Error::explain(
+                        pingora_core::ErrorType::InternalError,
+                        error.to_string(),
+                    ));
+                }
             }
         }
 
@@ -186,7 +205,13 @@ async fn serve_sse(
             next_keepalive = now + keepalive_interval;
         }
 
-        tokio::time::sleep(POLL_INTERVAL).await;
+        if read_replay {
+            continue;
+        }
+        tokio::select! {
+            _ = changes.changed() => read_replay = true,
+            _ = tokio::time::sleep_until(next_keepalive.min(started + max_connection_lifetime)) => {}
+        }
     }
 }
 
@@ -281,8 +306,12 @@ mod tests {
             data: serde_json::json!({"text": "hello"}),
         };
 
-        let first = dev_store.publish("app/one", "chat", &payload).unwrap();
-        let second = dev_store.publish("app/two", "chat", &payload).unwrap();
+        let first = dev_store
+            .publish("app/one", "chat", &payload, None)
+            .unwrap();
+        let second = dev_store
+            .publish("app/two", "chat", &payload, None)
+            .unwrap();
 
         assert_eq!(first.id, "1");
         assert_eq!(second.id, "1");

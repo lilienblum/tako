@@ -22,11 +22,7 @@ zig = "0.16.0"
 
 [tasks.bootstrap]
 description = "Install repository dependencies"
-run = [
-  "bun install --frozen-lockfile",
-  "cargo fetch --locked",
-  "go mod download",
-]
+run = ["bun install --frozen-lockfile", "cargo fetch --locked", "go mod download"]
 
 [hooks]
 # Install/refresh git hooks whenever tools are installed

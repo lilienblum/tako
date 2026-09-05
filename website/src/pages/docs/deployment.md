@@ -26,6 +26,10 @@ curl -fsSL https://tako.sh/install-server.sh | sudo sh -s -- --http-port 8080 --
 
 The installer creates the `tako` service user, the shared `tako-app` group, `/opt/tako`, `/var/run/tako`, service files, maintenance helpers, restricted sudoers policy, public HTTP/HTTPS listeners, local metrics, libvips runtime support, and private Tailscale management.
 
+On Linux, each app/environment runs as a separate Unix identity. Apps can write their own release files and data, including dependencies, while the service protects the release manifest and control directories. The internal socket checks the connecting Unix identity against the requested app. Image decoding runs under a separate unprivileged account with bounded resources.
+
+Production isolation requires cgroup v2 with CPU, memory, and process controllers. Each app is limited to 2 GiB of memory, two CPUs, and 512 processes. Missing identity provisioning or resource enforcement stops app startup. The installer restarts an existing service so children launched under an older policy are replaced. If you use `TAKO_RESTART_SERVICE=0` when upgrading, restart the service before relying on the updated isolation policy.
+
 Normal installs require Tailscale for remote management. The CLI expects a Tailscale MagicDNS host or Tailscale IP, verifies SSH recovery access, enrolls the SSH key for signed management, and then uses signed HTTP for app operations.
 
 ## Add A Server
@@ -86,6 +90,8 @@ Version names are based on git state: clean commit hash, dirty commit plus conte
 
 Native releases use runtime plugins or explicit `start` commands. JS runtimes run through SDK entrypoint wrappers. Go binaries run directly. Explicit `start` commands skip runtime defaults and runtime version probing.
 
+Runtime download or version resolution failures abort release preparation. Runtimes without a download definition use the server's PATH. Production dependency installation must succeed before the new release starts; dependency directories are not included in the uploaded archive.
+
 Native HTTP instances bind `127.0.0.1` on an OS-assigned port and signal readiness through fd 4. Secrets, storage bindings, and the internal health token arrive through fd 3.
 
 ## Container Releases
@@ -112,6 +118,8 @@ release = ""
 The release command runs once on the leader server after extract and production install but before rolling update. Followers wait for the leader result. If the command fails, times out, or exits by signal, deploy aborts on every server and leaves the old release serving.
 
 The command runs with the same env as new HTTP instances, plus freshly decrypted secrets as env vars. The hard timeout is 10 minutes.
+
+Release commands, production installs, and container builds retain the last 64 KiB of each output stream for diagnostics. Output is drained throughout execution, including when a command writes binary data.
 
 ## Rolling Updates
 
@@ -185,6 +193,8 @@ tako servers uninstall la --yes
 ```
 
 `reload` is zero-downtime by default. Its `--force` flag performs a restart. `upgrade` installs a candidate `tako-server` binary, enters upgrade mode, and checks its protocol against the CLI and every active release before reloading. It checks again after readiness. A mismatch fails before reload; any failure after reload begins restores and restarts the previous binary before upgrade mode ends. `upgrade --force` attempts a protocol mismatch but keeps readiness and rollback enabled. `uninstall` removes the remote service and data, then removes the local server entry.
+
+Maintenance runs through restricted, root-owned helpers. Upgrades accept only official releases: the CLI verifies the signed release manifest, and the host verifies the archive against that manifest before installation. Install custom builds as administrator; `servers upgrade` rejects `TAKO_DOWNLOAD_BASE_URL` overrides.
 
 ## Logs And Releases
 

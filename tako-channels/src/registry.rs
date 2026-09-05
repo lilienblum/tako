@@ -46,6 +46,7 @@ mod tests {
             params_schema: json!({ "type": "object" }),
             auth: ChannelAuthScheme::Public,
             transport: None,
+            lifecycle: Default::default(),
         }
     }
 

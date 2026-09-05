@@ -74,11 +74,12 @@ scp_to() {
 
 ssh_wait() {
   local host=$1
-  for _ in $(seq 1 80); do
+  # Server startup runs the real installer, including distro dependency setup.
+  for _ in $(seq 1 300); do
     if ssh_exec "$host" "echo ok" >/dev/null 2>&1; then
       return 0
     fi
-    sleep 0.25
+    sleep 1
   done
   echo "SSH not ready: $host" >&2
   return 1
@@ -580,23 +581,17 @@ run_universal_http_checks() {
 
 start_tako_server() {
   local host=$1
-  local server_bin=$2
   # Docker-compatible engines use different RFC 1918 bridge ranges. Treat the
   # isolated E2E network as the trusted proxy boundary on all of them.
   local server_config='{"server_name":"e2e","trusted_proxy":{"trusted_cidrs":["10.0.0.0/8","172.16.0.0/12","192.168.0.0/16"]}}'
-  scp_to "$server_bin" "$host" "/home/tako/tako-server"
-  scp_to "$WORKSPACE/scripts/install-tako-server.sh" "$host" "/home/tako/install-tako-server.sh"
-  ssh_exec "$host" "set -eu; chmod 0755 /home/tako/tako-server /home/tako/install-tako-server.sh; tar -cf - -C /home/tako tako-server | zstd -o /home/tako/tako-server.tar.zst; sha256sum /home/tako/tako-server.tar.zst | awk '{print \$1}' > /home/tako/tako-server.tar.zst.sha256"
-  if ! ssh_exec "$host" "sudo sh -c 'TAKO_SERVER_URL=file:///home/tako/tako-server.tar.zst TAKO_RESTART_SERVICE=0 TAKO_SERVER_NAME=e2e sh /home/tako/install-tako-server.sh'"; then
-    ssh_exec "$host" "rm -f /home/tako/tako-server /home/tako/tako-server.tar.zst /home/tako/tako-server.tar.zst.sha256 /home/tako/install-tako-server.sh" >/dev/null 2>&1 || true
+  if ! ssh_exec "$host" "/usr/local/bin/tako-server --version"; then
     return 2
   fi
   # E2E marks requests as HTTPS through forwarded headers from the Docker bridge.
   # Keep production defaults strict while making the test proxy relationship explicit.
-  ssh_exec "$host" "printf '%s\n' '$server_config' | sudo tee /opt/tako/config.json >/dev/null && sudo chown tako:tako /opt/tako/config.json && sudo chmod 0644 /opt/tako/config.json"
-  ssh_exec "$host" "rm -f /home/tako/tako-server /home/tako/tako-server.tar.zst /home/tako/tako-server.tar.zst.sha256 /home/tako/install-tako-server.sh"
-  ssh_exec "$host" "sudo pkill -x tako-server >/dev/null 2>&1 || true"
-  ssh_exec "$host" "sudo rm -f /var/run/tako/tako.sock"
+  ssh_exec "$host" "printf '%s\n' '$server_config' > /opt/tako/config.json && chmod 0644 /opt/tako/config.json"
+  ssh_exec "$host" "pkill -x tako-server >/dev/null 2>&1 || true"
+  ssh_exec "$host" "rm -f /var/run/tako/tako.sock"
   ssh_exec "$host" "RUST_LOG=info nohup /usr/local/bin/tako-server --no-acme --http-port 8080 --https-port 8443 --data-dir /opt/tako --management-host 0.0.0.0 >/tmp/tako-server.log 2>&1 &"
   wait_tako_socket "$host"
   wait_tako_management_http "$host"

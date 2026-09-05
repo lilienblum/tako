@@ -10,6 +10,7 @@
 //! - `supervisor` — per-app worker process lifecycle
 //! - `enqueue_socket` — per-app unix socket listener for SDK RPCs
 
+mod blocking;
 pub mod cron;
 pub mod dispatcher;
 pub mod enqueue;

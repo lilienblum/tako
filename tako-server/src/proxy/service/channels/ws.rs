@@ -8,6 +8,7 @@ use crate::proxy::TakoProxy;
 use bytes::Bytes;
 use pingora_core::prelude::*;
 use pingora_proxy::Session;
+use std::sync::Arc;
 use std::time::Duration;
 use tako_channels::close_codes::ChannelCloseCode;
 
@@ -44,7 +45,7 @@ impl TakoProxy {
     pub(super) async fn write_channel_websocket(
         &self,
         session: &mut Session,
-        store: &ChannelStore,
+        store: &Arc<ChannelStore>,
         channel: &str,
         query_after: Option<i64>,
         auth_mode: ChannelWebSocketAuth,
@@ -152,14 +153,14 @@ impl TakoProxy {
             }
         };
 
-        if let Err(error) = store.sync_channel(channel, &auth) {
+        if let Err(error) = store.sync_channel_async(channel, &auth).await {
             tracing::error!("failed to sync websocket channel metadata: {error}");
             return self
                 .write_websocket_close(session, ChannelCloseCode::VerifyRejected, true)
                 .await;
         }
 
-        let mut after = match store.replay_cursor(channel, requested_after) {
+        let mut after = match store.replay_cursor_async(channel, requested_after).await {
             Ok(after) => after,
             Err(ChannelError::StaleCursor) => {
                 return self
@@ -178,14 +179,25 @@ impl TakoProxy {
         let max_connection_lifetime = Duration::from_millis(auth.max_connection_lifetime_ms.max(1));
         let started_at = tokio::time::Instant::now();
         let mut next_ping = started_at + keepalive_interval;
+        let mut changes = store.changes();
+        let mut read_replay = true;
 
         loop {
-            let messages = store.read_after(channel, after, 100).map_err(|error| {
-                Error::explain(
-                    ErrorType::InternalError,
-                    format!("Failed to read channel replay: {error}"),
-                )
-            })?;
+            let messages = if read_replay {
+                changes.borrow_and_update();
+                store
+                    .read_after_async(channel, after, 100)
+                    .await
+                    .map_err(|error| {
+                        Error::explain(
+                            ErrorType::InternalError,
+                            format!("Failed to read channel replay: {error}"),
+                        )
+                    })?
+            } else {
+                Vec::new()
+            };
+            read_replay = messages.len() == 100;
 
             if !messages.is_empty() {
                 for message in messages {
@@ -224,23 +236,23 @@ impl TakoProxy {
                 return Ok(true);
             }
 
-            // Wake at the same 100ms cadence as the SSE transport so new
-            // messages are delivered promptly, not only on keepalive ticks.
-            let poll_deadline = tokio::time::Instant::now() + Duration::from_millis(100);
-            let sleep_until = poll_deadline
-                .min(next_ping)
-                .min(started_at + max_connection_lifetime);
+            if read_replay {
+                continue;
+            }
+            let sleep_until = next_ping.min(started_at + max_connection_lifetime);
             enum WebSocketAction {
                 Read(Option<Bytes>),
                 Tick,
+                Changed,
             }
 
             let action = {
                 let mut sleep = std::pin::pin!(tokio::time::sleep_until(sleep_until));
-                let mut read = std::pin::pin!(session.as_downstream_mut().read_body_or_idle(true));
+                let mut read = std::pin::pin!(session.as_downstream_mut().read_body_or_idle(false));
                 tokio::select! {
                     body = &mut read => WebSocketAction::Read(body?),
                     _ = &mut sleep => WebSocketAction::Tick,
+                    _ = changes.changed() => WebSocketAction::Changed,
                 }
             };
 
@@ -265,7 +277,7 @@ impl TakoProxy {
                                             format!("Invalid websocket publish payload: {error}"),
                                         )
                                     })?;
-                                store.append(channel, &payload).map_err(|error| {
+                                store.append_async(channel, &payload).await.map_err(|error| {
                                     Error::explain(
                                         ErrorType::InternalError,
                                         format!(
@@ -309,6 +321,7 @@ impl TakoProxy {
                     next_ping = tokio::time::Instant::now() + keepalive_interval;
                 }
                 WebSocketAction::Read(None) => return Ok(true),
+                WebSocketAction::Changed => read_replay = true,
                 WebSocketAction::Tick => {
                     if tokio::time::Instant::now() >= next_ping {
                         session
@@ -340,7 +353,7 @@ async fn read_first_websocket_text_frame(
 
         let action = {
             let mut sleep = std::pin::pin!(tokio::time::sleep_until(deadline));
-            let mut read = std::pin::pin!(session.as_downstream_mut().read_body_or_idle(true));
+            let mut read = std::pin::pin!(session.as_downstream_mut().read_body_or_idle(false));
             tokio::select! {
                 body = &mut read => FirstFrameAction::Read(body?),
                 _ = &mut sleep => FirstFrameAction::Timeout,

@@ -5,6 +5,9 @@ mod exec;
 mod filesystem;
 mod tako;
 
+#[cfg(test)]
+mod maintenance_tests;
+
 pub use tako::{InstallServerMode, ServerInstallPorts};
 
 use super::error::{SshError, SshResult};

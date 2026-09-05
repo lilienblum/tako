@@ -1,6 +1,13 @@
 #!/bin/sh
 set -eu
 
+# Compose gives each server its own cgroup namespace. Never mount the host's
+# cgroup tree: this only delegates the disposable container's subtree.
+test "$(cat /proc/1/cgroup)" = "0::/"
+mkdir -p /sys/fs/cgroup/control
+printf '%s\n' "$$" > /sys/fs/cgroup/control/cgroup.procs
+printf '%s\n' '+cpu +memory +pids' > /sys/fs/cgroup/cgroup.subtree_control
+
 if ! getent group tako >/dev/null 2>&1; then
   groupadd --system tako
 fi
@@ -20,6 +27,20 @@ cp /opt/e2e/keys/id_ed25519.pub /opt/tako/management-authorized-keys
 chmod 600 /home/tako/.ssh/authorized_keys
 chmod 600 /opt/tako/management-authorized-keys
 chown -R tako:tako /home/tako/.ssh /var/run/tako /opt/tako || true
+
+# Install the mounted build while still root, then exercise only the production
+# sudo policy through SSH. The runner has no unrestricted root shell.
+libc_kind=glibc
+if [ -f /etc/alpine-release ]; then libc_kind=musl; fi
+if [ -x "/opt/e2e/bin/$libc_kind/tako-server" ]; then
+  archive_dir="$(mktemp -d)"
+  archive="$archive_dir/tako-server.tar.zst"
+  tar -cf - -C "/opt/e2e/bin/$libc_kind" tako-server | zstd -f -o "$archive"
+  sha256sum "$archive" | awk '{print $1}' > "$archive.sha256"
+  TAKO_SERVER_URL="file://$archive" TAKO_RESTART_SERVICE=0 TAKO_SERVER_NAME=e2e sh /opt/e2e/install-server.sh
+  rm -f "$archive" "$archive.sha256"
+  rmdir "$archive_dir"
+fi
 
 cat > /etc/ssh/sshd_config <<'CFG'
 Port 22

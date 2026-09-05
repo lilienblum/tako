@@ -14,7 +14,7 @@ Durability is part of the channel contract, but it is scoped to delivery. Every 
 
 ## The channel is the contract
 
-A JavaScript or TypeScript channel is a default export from `src/channels/*.ts` by default. The first argument is the wire name, `paramsSchema` is a TypeBox schema, `auth.verify` decides access, and the presence of `handler` selects bidirectional WebSocket transport.
+A JavaScript or TypeScript channel is a default export from `src/channels/*.ts` by default. The first argument is the wire name, `paramsSchema` is a TypeBox schema, `auth.verify` decides access, and `transport: "ws"` selects bidirectional WebSocket transport.
 
 ```ts
 // src/channels/presence.ts
@@ -37,16 +37,13 @@ export default defineChannel("presence", {
         : false;
     },
   },
-  handler: {
-    cursor: (data) => data,
-    typing: (data) => data,
-  },
+  transport: "ws",
 }).$messageTypes<PresenceMessages>();
 ```
 
 TypeBox matters here because it gives Tako both sides of the shape. Per the [TypeBox docs](https://github.com/sinclairzx81/typebox), a schema is a JSON Schema object that can also infer a TypeScript type. Tako uses that JSON Schema to validate `/_tako/channels/presence?roomId=lobby` before asking your app to authorize anything, while TypeScript uses the same declaration to type `params.roomId` in your callback.
 
-No handler means receive-only SSE. A handler declaration selects WebSocket, and the current v0 proxy stores and broadcasts client `{ type, data }` frames as sent. App-side handler callbacks are not yet part of the deployed dispatch path. See the [Channels reference](/docs/channels/) for the current contract.
+The default transport is receive-only SSE. With `transport: "ws"`, the proxy stores and broadcasts client `{ type, data }` frames as sent. Handle application mutations through your app's HTTP endpoints. See the [Channels reference](/docs/channels/) for the current contract.
 
 ## Auth happens before messages
 

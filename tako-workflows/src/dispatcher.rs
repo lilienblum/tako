@@ -131,18 +131,21 @@ async fn run_dispatcher(
                     }
                 }
                 inner.pending_signal.store(false, Ordering::Release);
-                wake_if_runnable(&wake, &has_runnable_work);
+                wake_if_runnable(&wake, &has_runnable_work).await;
             }
             _ = scan.tick() => {
-                wake_if_runnable(&wake, &has_runnable_work);
+                wake_if_runnable(&wake, &has_runnable_work).await;
             }
         }
     }
 }
 
-fn wake_if_runnable(wake: &WakeFn, has_runnable_work: &RunnableCheck) {
-    if has_runnable_work() {
-        wake();
+async fn wake_if_runnable(wake: &WakeFn, has_runnable_work: &RunnableCheck) {
+    let check = has_runnable_work.clone();
+    match crate::blocking::run(move || check()).await {
+        Ok(true) => wake(),
+        Ok(false) => {}
+        Err(error) => tracing::error!(%error, "Workflow runnable check failed"),
     }
 }
 
@@ -150,6 +153,38 @@ fn wake_if_runnable(wake: &WakeFn, has_runnable_work: &RunnableCheck) {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test]
+    async fn database_check_does_not_block_async_tasks() {
+        let (started_tx, mut started_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let release_rx = std::sync::Mutex::new(release_rx);
+        let (result_tx, mut result_rx) = tokio::sync::mpsc::unbounded_channel();
+        let check: RunnableCheck = Arc::new(move || {
+            started_tx.send(()).unwrap();
+            let released = release_rx
+                .lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(2))
+                .is_ok();
+            result_tx.send(released).unwrap();
+            false
+        });
+        let dispatcher = WorkDispatcher::spawn_with_intervals(
+            Arc::new(|| {}),
+            check,
+            Duration::ZERO,
+            Duration::from_secs(60),
+        );
+        dispatcher.signaler().signal();
+        started_rx.recv().await.unwrap();
+        release_tx.send(()).unwrap();
+        assert!(
+            result_rx.recv().await.unwrap(),
+            "DB check prevented the async task from releasing it"
+        );
+        dispatcher.shutdown().await;
+    }
 
     fn wake_counter() -> (WakeFn, Arc<AtomicUsize>) {
         let count = Arc::new(AtomicUsize::new(0));

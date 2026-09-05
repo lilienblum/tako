@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   TAKO_INTERNAL_CHANNELS_AUTHORIZE_PATH,
-  TAKO_INTERNAL_CHANNELS_DISPATCH_PATH,
   TAKO_INTERNAL_CHANNELS_REGISTRY_PATH,
   TAKO_INTERNAL_TOKEN_HEADER,
   handleTakoEndpoint,
@@ -352,7 +351,7 @@ describe("handleTakoEndpoint", () => {
               return { subject: "user-123" };
             },
           },
-          handler: { msg: async (d: { text: string }) => d },
+          transport: "ws",
           replayWindowMs: 86_400_000,
           inactivityTtlMs: 0,
           keepaliveIntervalMs: 25_000,
@@ -388,70 +387,6 @@ describe("handleTakoEndpoint", () => {
     });
   });
 
-  describe("internal host channel dispatch", () => {
-    test("returns fanout data for a handled type", async () => {
-      channels.register(
-        "chat",
-        defineChannel("chat", {
-          auth: { verify: async () => true },
-          handler: { msg: async (data: { text: string }) => ({ text: data.text.toUpperCase() }) },
-        }),
-      );
-
-      const request = new Request(`http://test-app.tako${TAKO_INTERNAL_CHANNELS_DISPATCH_PATH}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          [TAKO_INTERNAL_TOKEN_HEADER]: "test-token",
-        },
-        body: JSON.stringify({
-          channel: "chat",
-          params: { roomId: "r1" },
-          frame: { type: "msg", data: { text: "hi" } },
-          subject: "u1",
-        }),
-      });
-
-      const response = await handleTakoEndpoint(request, mockStatus, channels);
-      expect(response).not.toBeNull();
-      expect(response!.status).toBe(200);
-      expect(await response!.json()).toEqual({
-        action: "fanout",
-        data: { text: "HI" },
-      });
-    });
-
-    test("returns reject for unknown channel", async () => {
-      const request = new Request(`http://test-app.tako${TAKO_INTERNAL_CHANNELS_DISPATCH_PATH}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          [TAKO_INTERNAL_TOKEN_HEADER]: "test-token",
-        },
-        body: JSON.stringify({
-          channel: "nope",
-          frame: { type: "msg", data: {} },
-        }),
-      });
-
-      const response = await handleTakoEndpoint(request, mockStatus, channels);
-      expect(response!.status).toBe(200);
-      expect(await response!.json()).toEqual({
-        action: "reject",
-        reason: "channel_not_defined",
-      });
-    });
-
-    test("rejects non-POST methods", async () => {
-      const request = new Request(`http://test-app.tako${TAKO_INTERNAL_CHANNELS_DISPATCH_PATH}`, {
-        method: "GET",
-        headers: { [TAKO_INTERNAL_TOKEN_HEADER]: "test-token" },
-      });
-      const response = await handleTakoEndpoint(request, mockStatus, channels);
-      expect(response!.status).toBe(405);
-    });
-  });
-
   describe("internal host channel registry", () => {
     test("returns channel definition metadata", async () => {
       channels.register(
@@ -459,7 +394,11 @@ describe("handleTakoEndpoint", () => {
         defineChannel("chat", {
           paramsSchema: (t) => t.Object({ roomId: t.String() }),
           auth: { cookieName: "session", verify: async () => true },
-          handler: { msg: async (data: { text: string }) => data },
+          transport: "ws",
+          replayWindowMs: 600_000,
+          inactivityTtlMs: 0,
+          keepaliveIntervalMs: 25_000,
+          maxConnectionLifetimeMs: 7_200_000,
         }),
       );
       channels.register("status", defineChannel("status"));
@@ -480,11 +419,19 @@ describe("handleTakoEndpoint", () => {
           },
           auth: { headerName: "authorization", cookieName: "session" },
           transport: "ws",
+          replayWindowMs: 600_000,
+          inactivityTtlMs: 0,
+          keepaliveIntervalMs: 25_000,
+          maxConnectionLifetimeMs: 7_200_000,
         },
         {
           channel: "status",
           paramsSchema: { type: "object", properties: {} },
           auth: false,
+          replayWindowMs: 600_000,
+          inactivityTtlMs: 0,
+          keepaliveIntervalMs: 25_000,
+          maxConnectionLifetimeMs: 7_200_000,
         },
       ]);
     });

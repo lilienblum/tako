@@ -60,9 +60,7 @@ export default defineChannel("presence", {
       return { subject: session.userId };
     },
   },
-  handler: {
-    typing: (data) => data,
-  },
+  transport: "ws",
 }).$messageTypes<{ typing: { userId: string } }>();
 ```
 
@@ -78,7 +76,7 @@ await presence({ roomId: "42" }).publish({
 ```tsx
 // Client (React)
 import { useChannel } from "tako.sh/react";
-const { messages } = useChannel("presence", { params: { roomId: "42" } });
+const { messages } = useChannel("presence", { transport: "ws", params: { roomId: "42" } });
 ```
 
 There is no app key, no cluster, no auth endpoint to stand up separately. The auth callback runs inside your app on every connection and can hit your session store, database, feature flags — whatever "is this user allowed in this room" already means in your code.
@@ -103,7 +101,7 @@ Channels use the same public route for live delivery and resume:
 GET /_tako/channels/chat?roomId=42
 ```
 
-That window is for delivery, not product history. A collaborative cursor can be replayed after a laptop wakes. A chat message should still be written to your app database by your channel handler or route before it becomes canonical.
+That window is for delivery, not product history. A collaborative cursor can be replayed after a laptop wakes. Write canonical chat messages to your app database through an app route before publishing them.
 
 ## How the request actually flows
 

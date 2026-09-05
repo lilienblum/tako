@@ -9,7 +9,7 @@ import (
 
 const (
 	// DefaultChannelRetentionMs is the default replay window for channel events.
-	DefaultChannelRetentionMs int64 = 24 * 60 * 60 * 1000
+	DefaultChannelRetentionMs int64 = 10 * 60 * 1000
 	// DefaultChannelInactivityTtlMs disables idle timeout by default.
 	DefaultChannelInactivityTtlMs int64 = 0
 	// DefaultChannelKeepaliveIntervalMs is the default SSE keepalive interval.
@@ -188,6 +188,7 @@ func (m ChannelAuthMetadata) MarshalJSON() ([]byte, error) {
 // ChannelDefinitionMeta is the public metadata shape returned by the channel
 // registry endpoint.
 type ChannelDefinitionMeta struct {
+	ChannelLifecycleConfig
 	// Channel is the registered channel name.
 	Channel string `json:"channel"`
 	// ParamsSchema is the JSON Schema clients use to bind channel params.
@@ -310,10 +311,11 @@ func (r *ChannelRegistry) Metadata() []ChannelDefinitionMeta {
 			auth = ChannelAuthMetadata{Scheme: *definition.Auth}
 		}
 		out = append(out, ChannelDefinitionMeta{
-			Channel:      name,
-			ParamsSchema: definition.ParamsSchema,
-			Auth:         auth,
-			Transport:    definition.Transport,
+			ChannelLifecycleConfig: definition.ChannelLifecycleConfig.withDefaults(),
+			Channel:                name,
+			ParamsSchema:           definition.ParamsSchema,
+			Auth:                   auth,
+			Transport:              definition.Transport,
 		})
 	}
 	return out

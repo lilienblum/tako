@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { setChannelSocketPublisher } from "../../src/channels";
 import {
   CHANNEL_SYMBOL,
   defineChannel,
@@ -7,6 +8,32 @@ import {
 } from "../../src/channels/define";
 
 describe("defineChannel", () => {
+  test("server publishes include lifecycle before any subscription", async () => {
+    let received: unknown;
+    setChannelSocketPublisher(async (channel, payload) => {
+      received = payload;
+      return { id: "1", channel, ...payload };
+    });
+    try {
+      const events = defineChannel("events", {
+        replayWindowMs: 500,
+        inactivityTtlMs: 1000,
+      });
+      await events.publish({ type: "message", data: "hello" });
+      expect(received).toEqual({
+        type: "message",
+        data: "hello",
+        lifecycle: {
+          replayWindowMs: 500,
+          inactivityTtlMs: 1000,
+          keepaliveIntervalMs: 25000,
+          maxConnectionLifetimeMs: 7200000,
+        },
+      });
+    } finally {
+      setChannelSocketPublisher(null);
+    }
+  });
   test("accepts name first", () => {
     const exp = defineChannel("status");
     expect(exp.definition.type).toBe(CHANNEL_SYMBOL);
@@ -14,10 +41,10 @@ describe("defineChannel", () => {
     expect(exp.definition.auth).toBe(false);
   });
 
-  test("accepts name first with params and handlers", () => {
+  test("accepts name first with params and WebSocket transport", () => {
     const exp = defineChannel("chat", {
       paramsSchema: (t) => t.Object({ roomId: t.String() }),
-      handler: { "chat.send": async (data) => data },
+      transport: "ws",
     });
     expect(exp.definition.channel).toBe("chat");
     expect(exp.definition.transport).toBe("ws");
@@ -30,7 +57,7 @@ describe("defineChannel", () => {
     expect(exp.definition.channel).toBe("status");
     expect(exp.definition.auth).toBe(false);
     expect(exp.definition.paramsSchema).toMatchObject({ type: "object" });
-    expect(exp.definition.handler).toBeUndefined();
+    expect(exp.definition.transport).toBeUndefined();
   });
 
   test("serializes paramsSchema to JSON Schema", () => {
@@ -61,9 +88,9 @@ describe("defineChannel", () => {
     });
   });
 
-  test("handler presence implies ws transport", () => {
+  test("explicit transport enables WebSocket connections", () => {
     const exp = defineChannel("chat", {
-      handler: { "chat.send": async (data) => data },
+      transport: "ws",
     }).$messageTypes<{ "chat.send": { text: string } }>();
     expect(exp.definition.transport).toBe("ws");
   });
@@ -82,7 +109,9 @@ describe("defineChannel", () => {
   });
 
   test("export is a typed handle when params absent", () => {
-    const exp = defineChannel("status").$messageTypes<{ ping: { at: number } }>();
+    const exp = defineChannel("status").$messageTypes<{
+      ping: { at: number };
+    }>();
     expect(exp.name).toBe("status");
     expect(typeof exp.publish).toBe("function");
     expect(isChannelExport(exp)).toBe(true);

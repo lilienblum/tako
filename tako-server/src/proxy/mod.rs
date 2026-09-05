@@ -69,7 +69,7 @@ pub struct TakoProxy {
     /// Reused per-app channel stores. Keyed by deployed app id; opened
     /// lazily the first time an app's channel route is hit and dropped
     /// when the app is unregistered.
-    channel_stores: SyncRwLock<HashMap<String, Arc<ChannelStore>>>,
+    channel_stores: SyncRwLock<HashMap<String, Arc<tokio::sync::OnceCell<Arc<ChannelStore>>>>>,
     channel_postgres_url: SyncRwLock<Option<ChannelPostgresUrlResolver>>,
     /// Per-IP concurrent request limiter (DDoS mitigation)
     ip_tracker: IpRequestTracker,

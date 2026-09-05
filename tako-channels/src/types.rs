@@ -142,6 +142,46 @@ pub struct ChannelDefinitionMeta {
     pub auth: ChannelAuthScheme,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transport: Option<ChannelTransport>,
+    #[serde(flatten)]
+    pub lifecycle: ChannelLifecycle,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelLifecycle {
+    #[serde(default = "default_replay_window_ms")]
+    pub replay_window_ms: u64,
+    #[serde(default = "default_inactivity_ttl_ms")]
+    pub inactivity_ttl_ms: u64,
+    #[serde(default = "default_keepalive_interval_ms")]
+    pub keepalive_interval_ms: u64,
+    #[serde(default = "default_max_connection_lifetime_ms")]
+    pub max_connection_lifetime_ms: u64,
+}
+
+impl Default for ChannelLifecycle {
+    fn default() -> Self {
+        Self {
+            replay_window_ms: DEFAULT_REPLAY_WINDOW_MS,
+            inactivity_ttl_ms: DEFAULT_INACTIVITY_TTL_MS,
+            keepalive_interval_ms: DEFAULT_KEEPALIVE_INTERVAL_MS,
+            max_connection_lifetime_ms: DEFAULT_MAX_CONNECTION_LIFETIME_MS,
+        }
+    }
+}
+
+impl ChannelDefinitionMeta {
+    pub fn lifecycle_auth(&self) -> ChannelAuthResponse {
+        ChannelAuthResponse {
+            ok: true,
+            subject: None,
+            transport: self.transport.clone(),
+            replay_window_ms: self.lifecycle.replay_window_ms,
+            inactivity_ttl_ms: self.lifecycle.inactivity_ttl_ms,
+            keepalive_interval_ms: self.lifecycle.keepalive_interval_ms,
+            max_connection_lifetime_ms: self.lifecycle.max_connection_lifetime_ms,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]

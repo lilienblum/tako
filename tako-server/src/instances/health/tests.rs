@@ -331,16 +331,14 @@ async fn test_check_instance_detects_process_exit() {
     let instance = app.allocate_instance();
 
     // Spawn a process that exits immediately.
-    let child = tokio::process::Command::new("true")
+    let mut child = tokio::process::Command::new("true")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
         .unwrap();
+    child.wait().await.unwrap();
     instance.set_process(child);
     instance.set_state(InstanceState::Healthy);
-
-    // Wait for the process to actually exit.
-    tokio::time::sleep(Duration::from_millis(100)).await;
 
     checker.check_instance(&app, &instance).await;
 

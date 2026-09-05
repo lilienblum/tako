@@ -5,7 +5,7 @@ mod runtime_version;
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 
-use crate::build::{BuildAdapter, BuildCache, BuildExecutor, BuildPreset, PresetGroup};
+use crate::build::{BuildAdapter, BuildExecutor, BuildPreset, PresetGroup};
 use crate::config::TakoToml;
 use crate::output;
 
@@ -52,12 +52,9 @@ pub(super) async fn prepare_build_phase(
     let build_phase_timer = output::timed("Build phase");
 
     let executor = BuildExecutor::new(&project_dir);
-    let cache = BuildCache::new(project_dir.join(".tako/artifacts"));
-    cache.init().map_err(|e| e.to_string())?;
-    match cleanup_local_artifact_cache(
-        cache.cache_dir(),
-        LOCAL_ARTIFACT_CACHE_KEEP_TARGET_ARTIFACTS,
-    ) {
+    let cache_dir = project_dir.join(".tako/artifacts");
+    std::fs::create_dir_all(&cache_dir).map_err(|e| e.to_string())?;
+    match cleanup_local_artifact_cache(&cache_dir, LOCAL_ARTIFACT_CACHE_KEEP_TARGET_ARTIFACTS) {
         Ok(summary) if summary.total_removed() > 0 => {
             tracing::debug!(
                 "Local artifact cache cleanup: removed {} old artifact(s), {} stale metadata file(s)",
@@ -136,7 +133,7 @@ pub(super) async fn prepare_build_phase(
         let artifacts_by_target = build_container_target_artifacts(
             &project_dir,
             &source_root,
-            cache.cache_dir(),
+            &cache_dir,
             &app_json_bytes,
             &version,
             &build_groups,
@@ -338,7 +335,7 @@ pub(super) async fn prepare_build_phase(
     let artifacts_by_target = build_target_artifacts(
         &project_dir,
         &source_root,
-        cache.cache_dir(),
+        &cache_dir,
         &app_json_bytes,
         &version,
         &runtime_tool,

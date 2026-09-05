@@ -11,8 +11,8 @@
 //! the management-socket pattern so two tako-server processes can hand
 //! over cleanly during upgrade.
 //!
-//! Auth: filesystem permissions only (`chmod 0660`, owned by the service
-//! user/group so `tako-app` processes can connect).
+//! Auth: filesystem access through the shared `tako-app` group plus a peer-UID
+//! check binding each production request to its per-app Unix identity.
 
 use std::ffi::CString;
 use std::os::unix::{ffi::OsStrExt, fs::PermissionsExt};
@@ -172,20 +172,31 @@ pub fn spawn(
 }
 
 fn configure_socket_permissions(path: &Path) -> std::io::Result<()> {
-    if let Some(gid) = app_socket_gid_for_root(lookup_user_ids, is_root())? {
+    if let Some(gid) = app_socket_gid(lookup_group_gid, is_root(), &process_groups()?)? {
         chown_group(path, gid)?;
     }
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o660))
 }
 
-fn app_socket_gid_for_root(
-    lookup: impl Fn(&str) -> std::io::Result<Option<(u32, u32)>>,
+fn app_socket_gid(
+    lookup: impl Fn(&str) -> std::io::Result<Option<u32>>,
     is_root: bool,
+    groups: &[u32],
 ) -> std::io::Result<Option<u32>> {
-    if !is_root {
-        return Ok(None);
+    Ok(lookup("tako-app")?.filter(|gid| is_root || groups.contains(gid)))
+}
+
+fn process_groups() -> std::io::Result<Vec<u32>> {
+    let count = unsafe { libc::getgroups(0, std::ptr::null_mut()) };
+    if count < 0 {
+        return Err(std::io::Error::last_os_error());
     }
-    Ok(lookup("tako-app")?.map(|(_uid, gid)| gid))
+    let mut groups = vec![0; count as usize];
+    if unsafe { libc::getgroups(count, groups.as_mut_ptr()) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    groups.push(unsafe { libc::getegid() });
+    Ok(groups)
 }
 
 fn is_root() -> bool {
@@ -193,22 +204,22 @@ fn is_root() -> bool {
     unsafe { libc::geteuid() == 0 }
 }
 
-fn lookup_user_ids(name: &str) -> std::io::Result<Option<(u32, u32)>> {
+fn lookup_group_gid(name: &str) -> std::io::Result<Option<u32>> {
     let name = CString::new(name).map_err(|_| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "user name contains interior NUL byte",
+            "group name contains interior NUL byte",
         )
     })?;
-    let mut entry = std::mem::MaybeUninit::<libc::passwd>::uninit();
+    let mut entry = std::mem::MaybeUninit::<libc::group>::uninit();
     let mut result = std::ptr::null_mut();
-    let mut buf = vec![0u8; passwd_buffer_size()];
+    let mut buf = vec![0u8; group_buffer_size()];
 
     loop {
         // SAFETY: name is a valid C string; entry, result, and buf point to
-        // writable storage for getpwnam_r.
+        // writable storage for getgrnam_r.
         let rc = unsafe {
-            libc::getpwnam_r(
+            libc::getgrnam_r(
                 name.as_ptr(),
                 entry.as_mut_ptr(),
                 buf.as_mut_ptr().cast(),
@@ -220,9 +231,9 @@ fn lookup_user_ids(name: &str) -> std::io::Result<Option<(u32, u32)>> {
             if result.is_null() {
                 return Ok(None);
             }
-            // SAFETY: getpwnam_r returned success and result points at entry.
+            // SAFETY: getgrnam_r returned success and result points at entry.
             let entry = unsafe { entry.assume_init() };
-            return Ok(Some((entry.pw_uid, entry.pw_gid)));
+            return Ok(Some(entry.gr_gid));
         }
         if rc == libc::ERANGE {
             buf.resize(buf.len() * 2, 0);
@@ -232,9 +243,9 @@ fn lookup_user_ids(name: &str) -> std::io::Result<Option<(u32, u32)>> {
     }
 }
 
-fn passwd_buffer_size() -> usize {
-    // SAFETY: sysconf has no preconditions for _SC_GETPW_R_SIZE_MAX.
-    let size = unsafe { libc::sysconf(libc::_SC_GETPW_R_SIZE_MAX) };
+fn group_buffer_size() -> usize {
+    // SAFETY: sysconf has no preconditions for _SC_GETGR_R_SIZE_MAX.
+    let size = unsafe { libc::sysconf(libc::_SC_GETGR_R_SIZE_MAX) };
     if size > 0 { size as usize } else { 16 * 1024 }
 }
 
@@ -279,13 +290,21 @@ async fn run(
                                     let channel_publish = channel_publish.clone();
                                     let peer_auth = peer_auth.clone();
                                     async move {
-                                        handle_command(
-                                            &lookup,
-                                            channel_publish.as_ref(),
-                                            peer_auth.as_ref(),
-                                            peer_uid,
-                                            cmd,
-                                        )
+                                        match crate::blocking::run(move || {
+                                            handle_command(
+                                                &lookup,
+                                                channel_publish.as_ref(),
+                                                peer_auth.as_ref(),
+                                                peer_uid,
+                                                cmd,
+                                            )
+                                        }).await {
+                                            Ok(response) => response,
+                                            Err(error) => {
+                                                tracing::error!(%error, "Internal storage operation failed");
+                                                Response::error("Internal storage operation failed".to_string())
+                                            }
+                                        }
                                     }
                                 },
                                 |e| Response::error(format!("invalid request: {e}")),

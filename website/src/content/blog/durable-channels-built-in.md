@@ -32,10 +32,7 @@ export default defineChannel("chat", {
       return { subject: session.userId };
     },
   },
-  handler: {
-    msg: async (data) => data,
-    typing: async (data) => data,
-  },
+  transport: "ws",
 }).$messageTypes<ChatMessages>();
 ```
 

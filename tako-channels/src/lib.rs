@@ -7,17 +7,14 @@ mod routing;
 mod store;
 mod types;
 
-pub use client::{
-    ChannelDispatchRequest, ChannelDispatchResponse, authorize_channel_request,
-    dispatch_channel_message,
-};
+pub use client::authorize_channel_request;
 pub use close_codes::ChannelCloseCode;
 pub use routing::{parse_channel_route, parse_message_id_cursor, parse_ws_last_message_id};
 pub use store::{ChannelStore, ChannelStoreConfig, POSTGRES_CHANNELS_SCHEMA, channels_db_path};
 pub use types::{
     ChannelAuthResponse, ChannelAuthScheme, ChannelAuthVerifyRequest, ChannelDefinitionMeta,
-    ChannelError, ChannelHeaderValue, ChannelMessage, ChannelOperation, ChannelPublishPayload,
-    ChannelRoute, ChannelTransport,
+    ChannelError, ChannelHeaderValue, ChannelLifecycle, ChannelMessage, ChannelOperation,
+    ChannelPublishPayload, ChannelRoute, ChannelTransport,
 };
 
 #[cfg(test)]
@@ -28,7 +25,6 @@ pub(crate) use types::{
 pub const TAKO_PUBLIC_BASE_PATH: &str = "/_tako";
 pub const CHANNELS_BASE_PATH: &str = "/_tako/channels/";
 pub const INTERNAL_CHANNEL_AUTH_PATH: &str = "/channels/authorize";
-pub const INTERNAL_CHANNEL_DISPATCH_PATH: &str = "/channels/dispatch";
 pub const INTERNAL_CHANNEL_REGISTRY_PATH: &str = "/channels/registry";
 
 #[cfg(test)]

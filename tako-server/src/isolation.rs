@@ -1,18 +1,20 @@
 use std::path::Path;
-#[cfg(target_os = "linux")]
-use std::path::PathBuf;
 
 use sha2::{Digest, Sha256};
 use tako_spawn::{CgroupAssignment, ProcessIsolation, UserIds};
 
+#[cfg(any(target_os = "linux", test))]
+mod provision;
+#[cfg(target_os = "linux")]
+pub(crate) use provision::run_helper;
+
+#[cfg(target_os = "linux")]
+pub(crate) fn provision_app_data(data_dir: &Path, app_id: &str) -> Result<(), String> {
+    provision::request(data_dir, app_id, None)
+}
+
 const APP_USER_PREFIX: &str = "tako-";
 const SHARED_APP_GROUP: &str = "tako-app";
-#[cfg(target_os = "linux")]
-const CGROUP_MEMORY_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-#[cfg(target_os = "linux")]
-const CGROUP_CPU_MAX: &str = "200000 100000";
-#[cfg(target_os = "linux")]
-const CGROUP_PIDS_MAX: u64 = 512;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AppUnixIdentity {
@@ -21,8 +23,12 @@ pub(crate) struct AppUnixIdentity {
 }
 
 pub(crate) fn authorize_internal_socket_app(app: &str, peer_uid: u32) -> Result<(), String> {
-    if !crate::unix::is_root() {
-        return Ok(());
+    if cfg!(not(target_os = "linux")) && !crate::unix::is_root() {
+        return if peer_uid == unsafe { libc::geteuid() } {
+            Ok(())
+        } else {
+            Err(format!("internal socket app mismatch for {app}"))
+        };
     }
     let user_name = app_unix_user_name(app);
     let Some((uid, _)) = crate::unix::lookup_user_ids(&user_name)
@@ -40,7 +46,7 @@ pub(crate) fn authorize_internal_socket_app(app: &str, peer_uid: u32) -> Result<
 pub(crate) fn app_unix_user_name(app_id: &str) -> String {
     let digest = Sha256::digest(app_id.as_bytes());
     let hex = hex::encode(digest);
-    format!("{APP_USER_PREFIX}{}", &hex[..16])
+    format!("{APP_USER_PREFIX}{}", &hex[..27])
 }
 
 pub(crate) fn app_process_isolation(
@@ -52,21 +58,39 @@ pub(crate) fn app_process_isolation(
         ..ProcessIsolation::default()
     };
 
-    if !crate::unix::is_root() {
+    if cfg!(not(target_os = "linux")) && !crate::unix::is_root() {
         isolation.resource_limits = tako_spawn::ResourceLimits {
             open_files: None,
             processes: None,
             address_space_bytes: None,
         };
-        isolation.no_new_privs = false;
-        isolation.clear_ambient_capabilities = false;
-        isolation.umask = None;
         return Ok(isolation);
     }
 
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::MetadataExt;
+        provision::validate_service_context(data_dir)?;
+        let membership = Path::new("/sys/fs/cgroup/tako-apps")
+            .join(app_unix_user_name(app_id))
+            .join("cgroup.procs");
+        if std::fs::metadata(membership).map_or(true, |metadata| metadata.uid() != 0) {
+            provision::request(data_dir, app_id, None)?;
+        }
+    }
     let identity = ensure_app_unix_identity(app_id)?;
     isolation.user = Some(identity.ids);
-    isolation.cgroup = prepare_app_cgroup(data_dir, app_id).ok();
+    #[cfg(target_os = "linux")]
+    {
+        isolation.cgroup = Some(CgroupAssignment {
+            path: Path::new("/sys/fs/cgroup/tako-apps").join(app_unix_user_name(app_id)),
+        });
+        isolation.resource_limits.address_space_bytes = None;
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        isolation.cgroup = prepare_app_cgroup(data_dir, app_id).ok();
+    }
     Ok(isolation)
 }
 
@@ -78,13 +102,22 @@ pub(crate) fn prepare_app_filesystem_isolation(
 ) -> Result<Option<AppUnixIdentity>, String> {
     prepare_app_directory_modes(data_dir, app_id, data_paths, release_path)?;
 
-    if !crate::unix::is_root() {
+    if cfg!(not(target_os = "linux")) && !crate::unix::is_root() {
         return Ok(None);
     }
 
-    let identity = ensure_app_unix_identity(app_id)?;
-    apply_app_directory_ownership(data_dir, app_id, &identity, data_paths, release_path)?;
-    Ok(Some(identity))
+    #[cfg(target_os = "linux")]
+    {
+        provision::request(data_dir, app_id, release_path)?;
+        return ensure_app_unix_identity(app_id).map(Some);
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let identity = ensure_app_unix_identity(app_id)?;
+        apply_app_directory_ownership(data_dir, app_id, &identity, data_paths, release_path)?;
+        Ok(Some(identity))
+    }
 }
 
 fn prepare_app_directory_modes(
@@ -101,13 +134,11 @@ fn prepare_app_directory_modes(
     set_mode(&app_root, 0o750)?;
 
     let releases_root = app_root.join("releases");
-    if releases_root.exists() {
-        set_mode(&releases_root, 0o750)?;
-    }
+    std::fs::create_dir_all(&releases_root).map_err(|e| e.to_string())?;
+    set_mode(&releases_root, 0o750)?;
     let shared_root = app_root.join("shared");
-    if shared_root.exists() {
-        set_mode(&shared_root, 0o750)?;
-    }
+    std::fs::create_dir_all(&shared_root).map_err(|e| e.to_string())?;
+    set_mode(&shared_root, 0o750)?;
     let shared_logs = shared_root.join("logs");
     if shared_logs.exists() {
         set_mode(&shared_logs, 0o2770)?;
@@ -127,6 +158,7 @@ fn prepare_app_directory_modes(
     Ok(())
 }
 
+#[cfg(not(target_os = "linux"))]
 fn apply_app_directory_ownership(
     data_dir: &Path,
     app_id: &str,
@@ -181,6 +213,9 @@ fn ensure_app_unix_identity(app_id: &str) -> Result<AppUnixIdentity, String> {
         });
     }
 
+    if !crate::unix::is_root() {
+        return Err(format!("app identity {user_name} has not been provisioned"));
+    }
     create_app_user(&user_name, shared_gid)?;
     let (uid, gid) = crate::unix::lookup_user_ids(&user_name)
         .map_err(|e| format!("Failed to resolve created user {user_name}: {e}"))?
@@ -258,49 +293,13 @@ fn create_app_user(user_name: &str, _shared_gid: u32) -> Result<(), String> {
     }
 }
 
+#[cfg(not(target_os = "linux"))]
 fn prepare_app_cgroup(_data_dir: &Path, app_id: &str) -> Result<CgroupAssignment, String> {
-    #[cfg(target_os = "linux")]
-    {
-        let cgroup_root = current_cgroup_root()?.join("tako");
-        let app_cgroup = cgroup_root.join(app_unix_user_name(app_id));
-        std::fs::create_dir_all(&app_cgroup)
-            .map_err(|e| format!("create app cgroup {}: {e}", app_cgroup.display()))?;
-        write_if_exists(
-            app_cgroup.join("memory.max"),
-            CGROUP_MEMORY_MAX_BYTES.to_string(),
-        )?;
-        write_if_exists(app_cgroup.join("cpu.max"), CGROUP_CPU_MAX.to_string())?;
-        write_if_exists(app_cgroup.join("pids.max"), CGROUP_PIDS_MAX.to_string())?;
-        Ok(CgroupAssignment { path: app_cgroup })
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = app_id;
-        Err("cgroups require Linux".to_string())
-    }
+    let _ = app_id;
+    Err("cgroups require Linux".to_string())
 }
 
-#[cfg(target_os = "linux")]
-fn current_cgroup_root() -> Result<PathBuf, String> {
-    let raw = std::fs::read_to_string("/proc/self/cgroup")
-        .map_err(|e| format!("read /proc/self/cgroup: {e}"))?;
-    let rel = raw
-        .lines()
-        .find_map(|line| line.strip_prefix("0::"))
-        .ok_or_else(|| "cgroup v2 is not available".to_string())?
-        .trim_start_matches('/');
-    Ok(Path::new("/sys/fs/cgroup").join(rel))
-}
-
-#[cfg(target_os = "linux")]
-fn write_if_exists(path: PathBuf, value: String) -> Result<(), String> {
-    if !path.exists() {
-        return Ok(());
-    }
-    std::fs::write(&path, value).map_err(|e| format!("write cgroup file {}: {e}", path.display()))
-}
-
+#[cfg(not(target_os = "linux"))]
 fn chown_path_tree(path: &Path, uid: u32, gid: u32) -> std::io::Result<()> {
     let metadata = std::fs::symlink_metadata(path)?;
     crate::unix::lchown_path(path, uid, gid)?;
@@ -327,20 +326,26 @@ fn app_child_parent_death_signal() -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(target_os = "linux"))]
     use crate::release::{app_runtime_data_paths, ensure_app_runtime_data_dirs};
+    #[cfg(not(target_os = "linux"))]
     use std::os::unix::fs::PermissionsExt;
 
+    #[cfg(not(target_os = "linux"))]
     fn mode(path: &Path) -> u32 {
         std::fs::metadata(path).unwrap().permissions().mode() & 0o7777
     }
 
     #[test]
-    fn authorize_internal_socket_allows_any_uid_when_not_root() {
-        if crate::unix::is_root() {
-            return;
-        }
-        assert!(authorize_internal_socket_app("notes/production", 1).is_ok());
-        assert!(authorize_internal_socket_app("other/staging", 2).is_ok());
+    fn authorize_internal_socket_rejects_other_user() {
+        assert!(authorize_internal_socket_app("notes/production", u32::MAX).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_app_start_rejects_an_unconfigured_data_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        assert!(app_process_isolation(temp.path(), "unconfigured-test/production").is_err());
     }
 
     #[test]
@@ -366,6 +371,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "linux"))]
     fn prepare_app_filesystem_isolation_sets_private_modes_without_root() {
         let temp = tempfile::tempdir().unwrap();
         let app_id = "notes/production";

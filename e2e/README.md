@@ -31,16 +31,31 @@ just e2e examples/go/basic
 
 This runs the global e2e harness in `e2e/run.sh` against the fixture path.
 The harness generates an ephemeral SSH keypair per run inside a disposable Docker volume, starts real `tako-server` binaries on Ubuntu and Alpine test hosts, and starts AlmaLinux too when the current server binary's runtime libraries are available there. It never uses `~/.ssh`.
-Rust build caches are stored outside the repo at `${XDG_CACHE_HOME:-~/.cache}/tako/e2e` by default:
+Server containers run privileged with private cgroup namespaces so the production cgroup limits can be exercised. Their entrypoints move init into a control subgroup and enable CPU, memory, and process controllers within that container only. No host cgroup filesystem is bind-mounted. The entrypoint installs the mounted build as root before SSH starts; the runner then uses the installed restricted sudo policy.
 
-- `cargo-home` for Cargo registry/git cache
-- `target` for build outputs
-
-Override cache locations with:
+For a focused installed-isolation check after building the glibc server:
 
 ```bash
-E2E_CARGO_HOME_DIR=/path/to/cargo-home E2E_CARGO_TARGET_DIR=/path/to/target ./e2e/run.sh e2e/fixtures/javascript/tanstack-start
+docker run --rm --privileged --cgroupns=private \
+  --volume "$PWD:/workspace:ro" tako-e2e-server-ubuntu \
+  sh /workspace/e2e/docker/server/verify-isolation.sh
 ```
+
+The additional ignored `tako-spawn` test `service_child_joins_cgroup_before_dropping_all_authority` requires root and `TAKO_TEST_CGROUP` pointing at a writable test cgroup in a private namespace. It checks migration from a non-root service identity with only SETUID/SETGID capabilities, followed by execution as the app identity without capabilities.
+
+To also verify Bun dependency hardlinks, mount a Linux Bun binary matching the container architecture:
+
+```bash
+docker run --rm --privileged --cgroupns=private \
+  --volume "$PWD:/workspace:ro" \
+  --volume /absolute/path/to/linux-bun:/proof/bun:ro \
+  tako-e2e-server-ubuntu \
+  sh /workspace/e2e/docker/server/verify-release-dependencies.sh
+```
+
+This checks install, reprovisioning, dependency replacement, service access, and rejection of hardlinked manifests and service-owned files.
+
+Cargo registry and Git caches use the Docker volumes `tako-e2e-cargo-registry` and `tako-e2e-cargo-git`. Build outputs use `target/e2e-linux-glibc` and `target/e2e-linux-musl`; runnable binaries are copied to `.e2e-bin` (override with `E2E_BIN_DIR`).
 
 After deploy, it runs universal runtime checks:
 

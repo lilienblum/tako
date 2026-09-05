@@ -79,18 +79,6 @@ pub(crate) fn is_github_url(url: &str) -> bool {
     )
 }
 
-pub(crate) fn remote_curl_auth_header_script(url_var: &str) -> String {
-    format!(
-        "auth_header=''; \
-         case \"${{{url_var}}}\" in \
-           https://github.com/*|https://api.github.com/*|https://raw.githubusercontent.com/*) \
-             github_token=\"${{GH_TOKEN:-${{GITHUB_TOKEN:-}}}}\"; \
-             if [ -n \"$github_token\" ]; then auth_header=\"Authorization: Bearer $github_token\"; fi; \
-             ;; \
-         esac"
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

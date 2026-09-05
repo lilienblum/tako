@@ -13,7 +13,7 @@ Package name: `tako.sh`
 - Typed object storage bindings via `tako.storages`
 - Vite plugin for SSR framework builds
 - Built-in internal status endpoint (`GET /status` on `Host: <app>.tako`)
-- Built-in internal channel auth + dispatch endpoints on `Host: <app>.tako`
+- Built-in internal channel auth and registry endpoints on `Host: <app>.tako`
 
 The `tako.sh` package's named exports include the `tako` runtime object, definition helpers (`defineChannel`, `defineWorkflow`), the workflow `signal` function, `TakoError`, public image helpers, storage types, and types (`InferChannel`, `InferWorkflowPayload`, `TakoErrorCode`, `EnqueueOptions`, `WorkflowOpts`). Browser-safe channel clients are exported from `tako.sh/client`. There is no `Tako` global — channels and workflows are plain ES modules that you import where you use them.
 
@@ -141,7 +141,7 @@ export default defineChannel("chat", {
 - The first argument is the wire channel name. New scaffolded files use the file stem as the default name, but Tako does not rewrite existing channel files if you choose a different name.
 - Dynamic values are typed query params from `paramsSchema`.
 - `auth` is optional — omit or set `false` for public channels. Declarative auth receives `{ header?, cookie?, params, channel, operation }`.
-- Call `.$messageTypes<T>()` to type the per-message-type payloads. Presence of a `handler` option (not shown) chooses transport: WebSocket when present, SSE otherwise.
+- Call `.$messageTypes<T>()` to type the per-message-type payloads. Set `transport: "ws"` to enable WebSocket client publishing; omit it for SSE subscriptions.
 - Every publish is stored in Tako's bounded channel replay log before delivery. Single-server production stores replay in local SQLite by deployed app id (`{name}/{env}`); local dev keeps replay in memory for the current daemon process. Multi-server channels use shared Postgres configured through the `postgres_url` credential. `replayWindowMs` defaults to 10 minutes and can be overridden per channel.
 - Browser subscriptions keep reconnecting until closed. The SDK retries through network loss, laptop sleep, server restarts, and clean connection rotation, then resumes from the last received message id inside the bounded replay window.
 - Browser clients can pass `authorization: token` to send `Authorization: Bearer <token>` on SSE channels or the equivalent WebSocket auth frame. Use `headers.Authorization` for custom authorization values, and omit both options for public or cookie-auth channels.
@@ -163,6 +163,8 @@ await room.publish({ type: "msg", data: { text: "hi", userId: "u-1" } });
 
 ## Workflows
 
+Worker concurrency comes from the Tako runtime. `defineWorkflow` configures handlers, retries, backoff, schedules, and worker groups; it does not provide per-workflow concurrency or handler timeouts.
+
 Declare one workflow per file in `<app_root>/workflows/<name>.ts`. The default export exposes `.enqueue(payload)`:
 
 ```ts
@@ -182,7 +184,7 @@ export default defineWorkflow<{ userId: string }>("send-email", {
 });
 ```
 
-The SDK records `worker: "name"` metadata and can filter discovery by group. The production server currently supervises one workflow lane per app, so named groups do not yet provide process isolation or independent scaling. Do not depend on group assignment in production until that supervisor wiring ships.
+The production server starts a separate scale-to-zero process for each named JavaScript worker group. A workflow with `worker: "email"` runs in the process that claims that group. Worker counts, concurrency, and per-server overrides in `tako.toml` are parsed but not yet applied by production supervision.
 
 Set `local: true` in the workflow opts when a multi-server deploy should use per-server local queues and cron for that workflow. Local cron runs once per server and enqueue uniqueness is scoped to each server.
 
