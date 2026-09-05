@@ -38,17 +38,6 @@ cleanup() {
   local exit_code=$?
   if [[ $exit_code -ne 0 ]]; then
     docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" logs --no-color --tail=200 server-ubuntu server-alma server-alpine runner || true
-    # Capture identity/capability metadata, never environment or shadow contents.
-    docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" exec -T server-alma sh -c '
-      stat -c "%a %u:%g %n" /etc/shadow /usr/bin/sudo /usr/local/bin/tako-server
-      getcap /usr/local/bin/tako-server
-      for status in /proc/[0-9]*/status; do
-        if grep -qE "^Name:.*(sshd|tako-server|bash)" "$status" 2>/dev/null; then
-          grep -E "^(Name|Pid|PPid|Uid|Gid|Cap|NoNewPrivs|Seccomp):|^Cap" "$status"
-        fi
-      done
-      su -s /bin/sh tako -c "sudo -n -l"
-    ' || true
   fi
   docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" down --volumes --remove-orphans >/dev/null 2>&1 || true
 }

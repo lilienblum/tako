@@ -33,6 +33,8 @@ This runs the global e2e harness in `e2e/run.sh` against the fixture path.
 The harness generates an ephemeral SSH keypair per run inside a disposable Docker volume, starts real `tako-server` binaries on Ubuntu and Alpine test hosts, and starts AlmaLinux too when the current server binary's runtime libraries are available there. It never uses `~/.ssh`.
 Server containers run privileged with private cgroup namespaces so the production cgroup limits can be exercised. Their entrypoints move init into a control subgroup and enable CPU, memory, and process controllers within that container only. No host cgroup filesystem is bind-mounted. The entrypoint installs the mounted build as root before SSH starts; the runner then uses the installed restricted sudo policy.
 
+On disposable GitHub Actions runners, `e2e/prepare-ci-host.sh` permits DAC reads in the host's `unix-chkpwd` AppArmor profile. That host profile also attaches to AlmaLinux's PAM helper inside privileged containers, where the mode-000 shadow file needs this permission. The fixture check verifies sudo before and after the correction; production PAM policy, shadow permissions, and server capabilities are unchanged.
+
 For a focused installed-isolation check after building the glibc server:
 
 ```bash

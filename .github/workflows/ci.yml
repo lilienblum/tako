@@ -29,17 +29,16 @@ jobs:
       - name: Verify fixture sudo account
         run: |
           docker build -f e2e/docker/server/alma.Dockerfile -t tako-alma-fixture .
-          docker run --rm --privileged tako-alma-fixture sh -c '
+          if ! docker run --rm --privileged tako-alma-fixture sh -ec '
             echo "tako:tako-e2e" | chpasswd
-            if su -s /bin/sh tako -c "sudo -n -l"; then exit 0; fi
-            passwd -S tako
-            pwck -r
-            authselect current
-            authselect check
-            cat /etc/pam.d/sudo /etc/pam.d/system-auth /etc/nsswitch.conf
-            dnf install -y strace
-            strace -f -e trace=file,process,setuid,setreuid,setresuid,capget,capset su -s /bin/sh tako -c "sudo -n -l"
-            exit 1
+            su -s /bin/sh tako -c "sudo -n -l"
+          '; then
+            sudo dmesg | grep 'profile="unix-chkpwd"' || true
+          fi
+          sh e2e/prepare-ci-host.sh
+          docker run --rm --privileged tako-alma-fixture sh -ec '
+            echo "tako:tako-e2e" | chpasswd
+            su -s /bin/sh tako -c "sudo -n -l"
           '
 
   detect-changes:
@@ -584,6 +583,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          sh e2e/prepare-ci-host.sh
           for fixture in $(find e2e/fixtures -mindepth 2 -maxdepth 2 -type d | sort); do
             ./e2e/run.sh "$fixture"
           done
