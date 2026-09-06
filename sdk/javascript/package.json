@@ -80,7 +80,7 @@
     "@types/react-dom": "catalog:dev",
     "react": "catalog:",
     "react-dom": "catalog:",
-    "tsdown": "^0.22.14",
+    "tsdown": "^0.23.0",
     "typescript": "catalog:dev",
     "vite": "catalog:dev"
   },
