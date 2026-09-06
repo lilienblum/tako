@@ -79,7 +79,7 @@ time = { version = "0.3", features = ["local-offset"] }
 pem = "4.0"
 
 # Build system (archiving)
-zstd = "0.13"
+zstd = "0.14"
 tar = "0.4"
 sha2 = "0.11"
 hex = "0.4"
